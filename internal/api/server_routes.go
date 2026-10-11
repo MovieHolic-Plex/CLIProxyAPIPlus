@@ -24,7 +24,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
+	responsesclaude "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/claude/openai/responses"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/gemini"
@@ -62,7 +62,7 @@ func (s *Server) setupRoutes() {
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
-	v1.Use(AuthMiddleware(s.accessManager), apiKeyModelAccessMiddleware(s.modelAccessConfig.Load))
+	v1.Use(AuthMiddleware(s.accessManager))
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.GET("/models/*model", func(c *gin.Context) {
@@ -86,31 +86,29 @@ func (s *Server) setupRoutes() {
 		v1.POST("/responses", openaiResponsesHandlers.Responses)
 		v1.POST("/responses/compact", openaiResponsesHandlers.Compact)
 		v1.POST("/alpha/search", s.codexAlphaSearch)
-		v1.POST("/systemone", openaiHandlers.SystemOne)
 		v1.POST("/live", s.codexLiveHandler.Handle)
 		v1.GET("/live/:call_id", s.codexLiveHandler.HandleSideband)
 	}
 
 	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler)
 	standardAuth := realtimeStandardAuthMiddleware(s.accessManager)
-	modelAccess := apiKeyModelAccessMiddleware(s.modelAccessConfig.Load)
-	s.engine.GET("/v1/realtime", realtimeAuth, modelAccess, s.codexLiveHandler.HandleRealtimeWebsocket)
-	s.engine.POST("/v1/realtime", realtimeAuth, modelAccess, s.codexLiveHandler.Handle)
-	s.engine.POST("/v1/realtime/calls", realtimeAuth, modelAccess, s.codexLiveHandler.Handle)
-	s.engine.GET("/v1/realtime/calls/:call_id", realtimeAuth, modelAccess, s.codexLiveHandler.HandleSideband)
-	s.engine.POST("/v1/realtime/client_secrets", standardAuth, modelAccess, s.codexLiveHandler.CreateClientSecret)
-	s.engine.POST("/v1/realtime/sessions", standardAuth, modelAccess, s.codexLiveHandler.CreateLegacySession)
-	s.engine.POST("/v1/realtime/transcription_sessions", standardAuth, modelAccess, s.codexLiveHandler.HandleTranscriptionSession)
-	s.engine.GET("/v1/realtime/translations", realtimeAuth, modelAccess, s.codexLiveHandler.HandleTranslation)
-	s.engine.POST("/v1/realtime/translations", realtimeAuth, modelAccess, s.codexLiveHandler.HandleTranslation)
-	s.engine.POST("/v1/realtime/translations/client_secrets", standardAuth, modelAccess, s.codexLiveHandler.HandleTranslation)
-	s.engine.POST("/v1/realtime/calls/:call_id/hangup", standardAuth, modelAccess, s.codexLiveHandler.HandleHangup)
-	s.engine.POST("/v1/realtime/calls/:call_id/accept", standardAuth, modelAccess, s.codexLiveHandler.HandleSIPControl)
-	s.engine.POST("/v1/realtime/calls/:call_id/reject", standardAuth, modelAccess, s.codexLiveHandler.HandleSIPControl)
-	s.engine.POST("/v1/realtime/calls/:call_id/refer", standardAuth, modelAccess, s.codexLiveHandler.HandleSIPControl)
+	s.engine.GET("/v1/realtime", realtimeAuth, s.codexLiveHandler.HandleRealtimeWebsocket)
+	s.engine.POST("/v1/realtime", realtimeAuth, s.codexLiveHandler.Handle)
+	s.engine.POST("/v1/realtime/calls", realtimeAuth, s.codexLiveHandler.Handle)
+	s.engine.GET("/v1/realtime/calls/:call_id", realtimeAuth, s.codexLiveHandler.HandleSideband)
+	s.engine.POST("/v1/realtime/client_secrets", standardAuth, s.codexLiveHandler.CreateClientSecret)
+	s.engine.POST("/v1/realtime/sessions", standardAuth, s.codexLiveHandler.CreateLegacySession)
+	s.engine.POST("/v1/realtime/transcription_sessions", standardAuth, s.codexLiveHandler.HandleTranscriptionSession)
+	s.engine.GET("/v1/realtime/translations", realtimeAuth, s.codexLiveHandler.HandleTranslation)
+	s.engine.POST("/v1/realtime/translations", realtimeAuth, s.codexLiveHandler.HandleTranslation)
+	s.engine.POST("/v1/realtime/translations/client_secrets", standardAuth, s.codexLiveHandler.HandleTranslation)
+	s.engine.POST("/v1/realtime/calls/:call_id/hangup", standardAuth, s.codexLiveHandler.HandleHangup)
+	s.engine.POST("/v1/realtime/calls/:call_id/accept", standardAuth, s.codexLiveHandler.HandleSIPControl)
+	s.engine.POST("/v1/realtime/calls/:call_id/reject", standardAuth, s.codexLiveHandler.HandleSIPControl)
+	s.engine.POST("/v1/realtime/calls/:call_id/refer", standardAuth, s.codexLiveHandler.HandleSIPControl)
 
 	openaiV1 := s.engine.Group("/openai/v1")
-	openaiV1.Use(AuthMiddleware(s.accessManager), modelAccess)
+	openaiV1.Use(AuthMiddleware(s.accessManager))
 	{
 		openaiV1.POST("/videos", openaiHandlers.VideosCreate)
 		openaiV1.GET("/videos/:video_id/content", openaiHandlers.VideosContent)
@@ -119,7 +117,7 @@ func (s *Server) setupRoutes() {
 
 	// Codex CLI direct route aliases (chatgpt_base_url compatible)
 	codexDirect := s.engine.Group("/backend-api/codex")
-	codexDirect.Use(AuthMiddleware(s.accessManager), modelAccess)
+	codexDirect.Use(AuthMiddleware(s.accessManager))
 	{
 		codexDirect.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
 		codexDirect.POST("/responses", openaiResponsesHandlers.Responses)
@@ -129,7 +127,7 @@ func (s *Server) setupRoutes() {
 
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
-	v1beta.Use(AuthMiddleware(s.accessManager), modelAccess)
+	v1beta.Use(AuthMiddleware(s.accessManager))
 	{
 		v1beta.GET("/models", s.geminiModelsHandler(geminiHandlers))
 		v1beta.POST("/interactions", geminiHandlers.Interactions)
@@ -671,15 +669,6 @@ func (s *Server) handleGrokModels(c *gin.Context) {
 	} else {
 		models = grokModelsFromRegistryInfos(registry.GetGlobalRegistry().GetAvailableModelInfos())
 	}
-	if patterns := sdkaccess.ModelAccessPatterns(c); len(patterns) > 0 {
-		filtered := make([]grokbuild.ModelInfo, 0, len(models))
-		for _, model := range models {
-			if sdkaccess.ModelAllowed(model.ID, patterns) {
-				filtered = append(filtered, model)
-			}
-		}
-		models = filtered
-	}
 	s.writeModelListResponse(c, "openai", grokbuild.BuildResponse(models))
 }
 
@@ -716,7 +705,14 @@ func (s *Server) handleHomeCodexClientModels(c *gin.Context, clientVersion strin
 	if s.cfg.Client.Codex.EnableApplyPatch {
 		applyPatchCapabilityForModel = homeApplyPatchCapabilityForModel(entries, manager)
 	}
-	payload := codexmodels.BuildResponseForClientWithToolCapabilities(models, nil, webSearchCapabilityForModel, applyPatchCapabilityForModel, s.cfg.Client.Codex.OptimizeMultiAgentV2, clientVersion)
+	var payload map[string]any
+	if responsesclaude.ClientToolSearchEnabled() {
+		payload = codexmodels.BuildResponseForClientWithSearchToolRoutes(models, nil, homeProvidersForModel(entries), webSearchCapabilityForModel, applyPatchCapabilityForModel, homeToolSearchCapabilityForModel(entries), s.cfg.Client.Codex.OptimizeMultiAgentV2, clientVersion)
+	} else {
+		// upstream.claude.tool-search off keeps the catalog that predates
+		// tool_search, which never consulted Home routes for search support.
+		payload = codexmodels.BuildResponseForClientWithToolCapabilities(models, nil, webSearchCapabilityForModel, applyPatchCapabilityForModel, nil, s.cfg.Client.Codex.OptimizeMultiAgentV2, clientVersion)
+	}
 	body, errMarshal := codexmodels.MarshalCompact(payload)
 	if errMarshal != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": errMarshal.Error()})
@@ -728,6 +724,15 @@ func (s *Server) handleHomeCodexClientModels(c *gin.Context, clientVersion strin
 // homeApplyPatchCapabilityForModel uses only Home's exact public routing evidence,
 // never the local model registry or the template's metadata model ID.
 func homeApplyPatchCapabilityForModel(entries []homeModelEntry, manager *auth.Manager) codexmodels.ApplyPatchCapabilityForModelFunc {
+	providersForModel := homeProvidersForModel(entries)
+	return func(id string) bool {
+		return manager.SupportsApplyPatchForProviders(providersForModel(id))
+	}
+}
+
+// homeProvidersForModel returns Home's routing providers for an exact public
+// model ID. An empty entry stands for an unknown route so it can veto support.
+func homeProvidersForModel(entries []homeModelEntry) codexmodels.ProvidersForModelFunc {
 	providersByID := make(map[string][]string, len(entries))
 	for _, entry := range entries {
 		id := strings.TrimSpace(entry.id)
@@ -743,8 +748,31 @@ func homeApplyPatchCapabilityForModel(entries []homeModelEntry, manager *auth.Ma
 			}
 		}
 	}
+	return func(id string) []string {
+		return providersByID[strings.TrimSpace(id)]
+	}
+}
+
+// homeToolSearchCapabilityForModel trusts Home's per-route tool_search flag and
+// requires it on every route of the model. A Home that predates the flag never
+// enables native tool search.
+func homeToolSearchCapabilityForModel(entries []homeModelEntry) codexmodels.ToolSearchCapabilityForModelFunc {
+	routesByID := make(map[string][]registry.NativeCapabilityRoute, len(entries))
+	for _, entry := range entries {
+		id := strings.TrimSpace(entry.id)
+		routesByID[id] = append(routesByID[id], entry.nativeCapabilityRoutes...)
+	}
 	return func(id string) bool {
-		return manager.SupportsApplyPatchForProviders(providersByID[strings.TrimSpace(id)])
+		routes := routesByID[strings.TrimSpace(id)]
+		if len(routes) == 0 {
+			return false
+		}
+		for _, route := range routes {
+			if route.NativeCapabilities == nil || route.NativeCapabilities.ToolSearch == nil || !*route.NativeCapabilities.ToolSearch {
+				return false
+			}
+		}
+		return true
 	}
 }
 
@@ -768,9 +796,6 @@ func formatHomeCodexModel(entry homeModelEntry) map[string]any {
 	}
 	if entry.ownedBy != "" {
 		model["owned_by"] = entry.ownedBy
-	}
-	if entry.metadataModelID != "" {
-		model["metadata_model_id"] = entry.metadataModelID
 	}
 	for _, p := range entry.providers {
 		if strings.EqualFold(p, "devin") {
@@ -847,14 +872,11 @@ func (s *Server) geminiGetHandler(geminiHandler *gemini.GeminiAPIHandler) gin.Ha
 }
 
 type homeModelEntry struct {
-	id              string
-	metadataModelID string
-	created         int64
-	ownedBy         string
-	displayName     string
-	contextLength   int
-	maxInputTokens  int
-
+	id                     string
+	created                int64
+	ownedBy                string
+	displayName            string
+	contextLength          int
 	maxContextLength       int
 	maxCompletionTokens    int
 	thinking               *registry.ThinkingSupport
@@ -909,10 +931,7 @@ func formatHomeClaudeModel(entry homeModelEntry) map[string]any {
 	if displayName == "" {
 		displayName = entry.id
 	}
-	maxInput := entry.maxInputTokens
-	if maxInput <= 0 {
-		maxInput = entry.contextLength
-	}
+	maxInput := entry.contextLength
 	if maxInput <= 0 {
 		maxInput = registry.DefaultClaudeMaxInputTokens
 	}
@@ -928,13 +947,6 @@ func formatHomeClaudeModel(entry homeModelEntry) map[string]any {
 		"display_name":     displayName,
 		"max_input_tokens": maxInput,
 		"max_tokens":       maxOutput,
-	}
-	if entry.contextLength > 0 {
-		model["context_length"] = entry.contextLength
-		model["max_context_window"] = entry.contextLength
-	}
-	if entry.maxCompletionTokens > 0 {
-		model["max_completion_tokens"] = entry.maxCompletionTokens
 	}
 	if entry.created > 0 {
 		model["created_at"] = time.Unix(entry.created, 0).UTC().Format(time.RFC3339)
@@ -1023,15 +1035,6 @@ func (s *Server) loadHomeModelEntries(c *gin.Context) ([]homeModelEntry, bool) {
 		return nil, false
 	}
 
-	if patterns := sdkaccess.ModelAccessPatterns(c); len(patterns) > 0 {
-		filtered := make([]homeModelEntry, 0, len(entries))
-		for _, entry := range entries {
-			if sdkaccess.ModelAllowed(entry.id, patterns) {
-				filtered = append(filtered, entry)
-			}
-		}
-		entries = filtered
-	}
 	return entries, true
 }
 
@@ -1182,21 +1185,14 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 				displayName = strings.TrimSpace(displayName)
 			}
 			thinking := homeModelThinkingSupport(model)
-			metadataModelID, _ := model["metadata_model_id"].(string)
-			if metadataModelID == "" {
-				metadataModelID, _ = model["metadataModelID"].(string)
-			}
 
 			indexByID[id] = len(out)
 			out = append(out, homeModelEntry{
-				id:              id,
-				metadataModelID: strings.TrimSpace(metadataModelID),
-				created:         homeModelInt64Value(model, "created"),
-				ownedBy:         ownedBy,
-				displayName:     displayName,
-				contextLength:   int(homeModelInt64Value(model, "context_length", "contextLength", "inputTokenLimit", "max_input_tokens")),
-				maxInputTokens:  int(homeModelInt64Value(model, "max_input_tokens", "inputTokenLimit")),
-
+				id:                     id,
+				created:                homeModelInt64Value(model, "created"),
+				ownedBy:                ownedBy,
+				displayName:            displayName,
+				contextLength:          int(homeModelInt64Value(model, "context_length", "contextLength", "inputTokenLimit", "max_input_tokens")),
 				maxContextLength:       int(homeModelInt64Value(model, "max_context_length", "maxContextLength")),
 				maxCompletionTokens:    int(homeModelInt64Value(model, "max_completion_tokens", "maxCompletionTokens", "outputTokenLimit", "max_tokens")),
 				thinking:               thinking,
@@ -1210,25 +1206,6 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("home models payload contains no models")
 	}
-	for i := range out {
-		metadataID := out[i].metadataModelID
-		if metadataID == "" {
-			metadataID = out[i].id
-		}
-		if limit, ok := registry.LookupModelsDevLimit(metadataID); ok {
-			if limit.Context > 0 {
-				out[i].contextLength = limit.Context
-			}
-			if limit.Input > 0 {
-				out[i].maxInputTokens = limit.Input
-			} else if limit.Context > 0 {
-				out[i].maxInputTokens = limit.Context
-			}
-			if limit.Output > 0 {
-				out[i].maxCompletionTokens = limit.Output
-			}
-		}
-	}
 	return out, nil
 }
 
@@ -1237,11 +1214,14 @@ func homeModelNativeCapabilities(model map[string]any) *registry.NativeCapabilit
 	if !ok {
 		return nil
 	}
-	webSearch, ok := raw["web_search"].(bool)
-	if !ok {
-		return &registry.NativeCapabilities{}
+	capabilities := &registry.NativeCapabilities{}
+	if webSearch, okWebSearch := raw["web_search"].(bool); okWebSearch {
+		capabilities.WebSearch = &webSearch
 	}
-	return &registry.NativeCapabilities{WebSearch: &webSearch}
+	if toolSearch, okToolSearch := raw["tool_search"].(bool); okToolSearch {
+		capabilities.ToolSearch = &toolSearch
+	}
+	return capabilities
 }
 
 func appendUniqueHomeProvider(providers []string, provider string) []string {
