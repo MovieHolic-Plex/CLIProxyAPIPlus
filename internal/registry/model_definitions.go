@@ -26,6 +26,7 @@ const (
 type staticModelsJSON struct {
 	Claude      []*ModelInfo `json:"claude"`
 	Gemini      []*ModelInfo `json:"gemini"`
+	GeminiCLI   []*ModelInfo `json:"gemini-cli"`
 	Vertex      []*ModelInfo `json:"vertex"`
 	AIStudio    []*ModelInfo `json:"aistudio"`
 	CodexFree   []*ModelInfo `json:"codex-free"`
@@ -35,6 +36,7 @@ type staticModelsJSON struct {
 	Kimi        []*ModelInfo `json:"kimi"`
 	Antigravity []*ModelInfo `json:"antigravity"`
 	XAI         []*ModelInfo `json:"xai"`
+	Mistral     []*ModelInfo `json:"mistral"`
 	Devin       []*ModelInfo `json:"devin"`
 	Meta        []*ModelInfo `json:"meta"`
 }
@@ -47,6 +49,11 @@ func GetClaudeModels() []*ModelInfo {
 // GetGeminiModels returns the standard Gemini model definitions.
 func GetGeminiModels() []*ModelInfo {
 	return cloneModelInfos(getModels().Gemini)
+}
+
+// GetGeminiCLIModels returns the model definitions advertised by Gemini CLI OAuth credentials.
+func GetGeminiCLIModels() []*ModelInfo {
+	return cloneModelInfos(getModels().GeminiCLI)
 }
 
 // GetGeminiVertexModels returns Gemini model definitions for Vertex AI.
@@ -66,17 +73,17 @@ func GetCodexFreeModels() []*ModelInfo {
 
 // GetCodexTeamModels returns model definitions for the Codex team plan tier.
 func GetCodexTeamModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexTeam))
+	return WithCodexPaidBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexTeam)))
 }
 
 // GetCodexPlusModels returns model definitions for the Codex plus plan tier.
 func GetCodexPlusModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus))
+	return WithCodexPaidBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus)))
 }
 
 // GetCodexProModels returns model definitions for the Codex pro plan tier.
 func GetCodexProModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))
+	return WithCodexPaidBuiltins(WithCodexBuiltins(cloneModelInfos(getModels().CodexPro)))
 }
 
 // GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
@@ -92,122 +99,133 @@ func GetAntigravityModels() []*ModelInfo {
 var staticDevinModels = []*ModelInfo{
 	devinBuiltinSWE16SlowModelInfo(),
 	{
-		ID:                  "devin/swe-2",
+		ID:                  "swe-2",
 		Type:                "devin",
 		OwnedBy:             "cognition",
 		DisplayName:         "SWE-2",
 		ContextLength:       262000,
 		MaxCompletionTokens: 128000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"medium", "high", "max"},
 		},
 	},
 	{
-		ID:                  "devin/claude-fable-5-1",
+		ID:                  "claude-fable-5-1",
 		Type:                "devin",
 		OwnedBy:             "anthropic",
 		DisplayName:         "Claude Fable 5.1",
 		ContextLength:       1000000,
 		MaxCompletionTokens: 64000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"low", "medium", "high", "xhigh", "max"},
 		},
 	},
 	{
-		ID:                  "devin/gpt-6-astra",
+		ID:                  "gpt-6-astra",
 		Type:                "devin",
 		OwnedBy:             "openai",
 		DisplayName:         "GPT-6 Astra",
 		ContextLength:       1000000,
 		MaxCompletionTokens: 64000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"low", "medium", "high", "xhigh", "max"},
 		},
 	},
 	{
-		ID:                  "devin/glm-5-2",
+		ID:                  "glm-5-2",
 		Type:                "devin",
 		OwnedBy:             "zhipu",
 		DisplayName:         "GLM-5.2",
 		ContextLength:       200000,
 		MaxCompletionTokens: 64000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"none", "high"},
 		},
 	},
 	{
-		ID:                  "devin/glm-5-3",
+		ID:                  "glm-5-3",
 		Type:                "devin",
 		OwnedBy:             "zhipu",
 		DisplayName:         "GLM-5.3",
 		ContextLength:       1048576,
 		MaxCompletionTokens: 128000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"low", "high", "max"},
 		},
 	},
 	{
-		ID:                  "devin/glm-5-3-flash",
+		ID:                  "glm-5-3-flash",
 		Type:                "devin",
 		OwnedBy:             "zhipu",
 		DisplayName:         "GLM-5.3 Flash",
 		ContextLength:       1000000,
 		MaxCompletionTokens: 128000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"low", "high", "max"},
 		},
 	},
 	{
-		ID:                  "devin/gpt-5-6-sol",
+		ID:                  "gpt-5-6-sol",
 		Type:                "devin",
 		OwnedBy:             "openai",
 		DisplayName:         "GPT-5.6 Sol",
 		ContextLength:       1000000,
 		MaxCompletionTokens: 128000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"none", "low", "medium", "high", "xhigh", "max"},
 		},
 	},
 	{
-		ID:                  "devin/gemini-3-8-flash",
+		ID:                  "gemini-3-8-flash",
 		Type:                "devin",
 		OwnedBy:             "google",
 		DisplayName:         "Gemini 3.8 Flash",
 		ContextLength:       1048576,
 		MaxCompletionTokens: 65536,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"low", "medium", "high"},
 		},
 	},
 	{
-		ID:                  "devin/grok-4-6",
+		ID:                  "grok-4-6",
 		Type:                "devin",
 		OwnedBy:             "xai",
 		DisplayName:         "Grok 4.6",
 		ContextLength:       500000,
 		MaxCompletionTokens: 131072,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"low", "medium", "high", "xhigh"},
 		},
 	},
 	{
-		ID:                  "devin/deepseek-v4-flash",
+		ID:                  "deepseek-v4-flash",
 		Type:                "devin",
 		OwnedBy:             "deepseek",
 		DisplayName:         "DeepSeek V4 Flash",
 		ContextLength:       1048576,
 		MaxCompletionTokens: 64000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"high", "max"},
 		},
 	},
 	{
-		ID:                  "devin/deepseek-v4-1-flash",
+		ID:                  "deepseek-v4-1-flash",
 		Type:                "devin",
 		OwnedBy:             "deepseek",
 		DisplayName:         "DeepSeek V4.1 Flash",
 		ContextLength:       1048576,
 		MaxCompletionTokens: 64000,
+		SupportedEndpoints:  []string{"/chat/completions"},
 		Thinking: &ThinkingSupport{
 			Levels: []string{"high", "max"},
 		},
@@ -244,6 +262,160 @@ func GetXAIModels() []*ModelInfo {
 	return WithXAIBuiltins(cloneModelInfos(getModels().XAI))
 }
 
+// GetMistralModels returns the standard Mistral AI model definitions.
+func GetMistralModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Mistral)
+}
+
+// GetWorkBuddyModels returns the static fallback catalog for WorkBuddy global accounts.
+func GetWorkBuddyModels() []*ModelInfo {
+	now := int64(1789516800) // 2026-09-16
+	ids := []string{
+		"default-model", "fast-model", "balanced-model", "primary-model", "hy4-preview",
+		"gpt-5.6-sol", "gpt-5.6-terra", "deep-model", "deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "gpt-6-astra",
+		"hy4-preview-f", "hy3", "glm-5.2", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+		"gpt-5.3-codex", "gemini-3.5-flash", "glm-5.3", "kimi-k3", "kimi-k2.6",
+	}
+	models := make([]*ModelInfo, 0, len(ids))
+	for _, id := range ids {
+		models = append(models, &ModelInfo{
+			ID: id, Object: "model", Created: now, OwnedBy: "workbuddy", Type: "workbuddy",
+			DisplayName: id, Name: id, ContextLength: 200000, MaxCompletionTokens: 32768,
+			SupportedEndpoints: []string{"/chat/completions"},
+		})
+	}
+	return models
+}
+
+// GetCodeBuddyModels returns the available models for CodeBuddy (Tencent).
+// These models are served through the copilot.tencent.com API.
+func GetCodeBuddyModels() []*ModelInfo {
+	now := int64(1748044800) // 2025-05-24
+	return []*ModelInfo{
+		{
+			ID:                  "auto",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "Auto",
+			Description:         "Automatic model selection via CodeBuddy",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "glm-5v-turbo",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "GLM-5v Turbo",
+			Description:         "GLM-5v Turbo via CodeBuddy",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "glm-5.1",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "GLM-5.1",
+			Description:         "GLM-5.1 via CodeBuddy",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "glm-5.0-turbo",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "GLM-5.0 Turbo",
+			Description:         "GLM-5.0 Turbo via CodeBuddy",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "glm-5.0",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "GLM-5.0",
+			Description:         "GLM-5.0 via CodeBuddy",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "glm-4.7",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "GLM-4.7",
+			Description:         "GLM-4.7 via CodeBuddy",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "minimax-m2.7",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "MiniMax M2.7",
+			Description:         "MiniMax M2.7 via CodeBuddy",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "kimi-k2.5",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "Kimi K2.5",
+			Description:         "Kimi K2.5 via CodeBuddy",
+			ContextLength:       256000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "kimi-k2-thinking",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "Kimi K2 Thinking",
+			Description:         "Kimi K2 Thinking via CodeBuddy",
+			ContextLength:       256000,
+			MaxCompletionTokens: 32768,
+			Thinking:            &ThinkingSupport{ZeroAllowed: true},
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "deepseek-v3-2-volc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "DeepSeek V3.2 (Volc)",
+			Description:         "DeepSeek V3.2 via CodeBuddy",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+	}
+}
+
 // WithCodexBuiltins injects hard-coded Codex-only model definitions that should
 // not depend on remote models.json updates. Built-ins replace any matching IDs
 // already present in the provided slice.
@@ -254,6 +426,15 @@ func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 		codexBuiltinImage25FlareModelInfo(),
 		codexBuiltinImage25SunburstModelInfo(),
 		codexBuiltinImage25ModelInfo(),
+	)
+}
+
+// WithCodexPaidBuiltins injects Codex models advertised to paid plans by
+// upstream clients newer than the embedded static catalog.
+func WithCodexPaidBuiltins(models []*ModelInfo) []*ModelInfo {
+	return upsertModelInfos(models,
+		codexBuiltinGPT6SolModelInfo(),
+		codexBuiltinGPT6LunaModelInfo(),
 	)
 }
 
@@ -283,6 +464,58 @@ func codexBuiltinImage15ModelInfo() *ModelInfo {
 	}
 }
 
+func codexBuiltinGPT6SolModelInfo() *ModelInfo {
+	webSearch := true
+	return &ModelInfo{
+		ID:                  "gpt-6-sol",
+		Object:              "model",
+		Created:             1783616400,
+		OwnedBy:             "openai",
+		Type:                "openai",
+		DisplayName:         "GPT-6-Sol",
+		Version:             "gpt-6",
+		Description:         "GPT-6 Sol Codex model.",
+		ContextLength:       272000,
+		MaxCompletionTokens: 128000,
+		SupportedParameters: []string{"tools"},
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		},
+		SupportedInputModalities:  []string{"text", "image"},
+		SupportedOutputModalities: []string{"text"},
+		// The embedded/remote catalog marks gpt-6-sol with configuration_update
+		// support; the hard-coded paid builtin must not drop that capability.
+		SupportConfigurationUpdate: true,
+		NativeCapabilities:         &NativeCapabilities{WebSearch: &webSearch},
+	}
+}
+
+func codexBuiltinGPT6LunaModelInfo() *ModelInfo {
+	webSearch := true
+	return &ModelInfo{
+		ID:                  "gpt-6-luna",
+		Object:              "model",
+		Created:             1783616400,
+		OwnedBy:             "openai",
+		Type:                "openai",
+		DisplayName:         "GPT-6-Luna",
+		Version:             "gpt-6",
+		Description:         "GPT-6 Luna Codex model.",
+		ContextLength:       272000,
+		MaxCompletionTokens: 128000,
+		SupportedParameters: []string{"tools"},
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh", "max"},
+		},
+		SupportedInputModalities:  []string{"text", "image"},
+		SupportedOutputModalities: []string{"text"},
+		// The embedded/remote catalog marks gpt-6-luna with configuration_update
+		// support; the hard-coded paid builtin must not drop that capability.
+		SupportConfigurationUpdate: true,
+		NativeCapabilities:         &NativeCapabilities{WebSearch: &webSearch},
+	}
+}
+
 func codexBuiltinImageModelInfo() *ModelInfo {
 	return &ModelInfo{
 		ID:          codexBuiltinImageModelID,
@@ -295,6 +528,32 @@ func codexBuiltinImageModelInfo() *ModelInfo {
 	}
 }
 
+func filterModelInfos(models []*ModelInfo, excludedIDs ...string) []*ModelInfo {
+	if len(models) == 0 || len(excludedIDs) == 0 {
+		return models
+	}
+	excluded := make(map[string]struct{}, len(excludedIDs))
+	for _, id := range excludedIDs {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if id != "" {
+			excluded[id] = struct{}{}
+		}
+	}
+	if len(excluded) == 0 {
+		return models
+	}
+	filtered := models[:0]
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		if _, skip := excluded[strings.ToLower(strings.TrimSpace(model.ID))]; skip {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+	return filtered
+}
 func codexBuiltinImage25FlareModelInfo() *ModelInfo {
 	return &ModelInfo{
 		ID:          codexBuiltinImage25FlareModelID,
@@ -499,12 +758,17 @@ func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 // Supported channels:
 //   - claude
 //   - gemini
+//   - gemini-cli
 //   - gemini-interactions
 //   - vertex
 //   - aistudio
 //   - codex
 //   - kimi
-//   - antigravity
+//   - kilo
+//   - github-copilot
+//   - amazonq
+//   - kilocode (alias for kilo)
+//   - antigravity (returns static overrides only)
 //   - xai
 //   - devin
 //   - meta
@@ -515,6 +779,8 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetClaudeModels()
 	case "gemini":
 		return GetGeminiModels()
+	case "gemini-cli":
+		return GetGeminiCLIModels()
 	case "gemini-interactions":
 		return GetGeminiModels()
 	case "vertex":
@@ -525,16 +791,64 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetCodexProModels()
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
 		return GetKimiModels()
+	case "github-copilot":
+		return GetGitHubCopilotModels()
+	case "kiro":
+		return GetKiroModels()
+	case "kilo", "kilocode":
+		return GetKiloModels()
+	case "kilo-gateway":
+		return GetKiloGatewayModels()
+	case "amazonq":
+		return GetAmazonQModels()
 	case "antigravity":
 		return GetAntigravityModels()
+	case "codebuddy":
+		return GetCodeBuddyModels()
+	case "workbuddy":
+		return GetWorkBuddyModels()
+	case "cursor":
+		return GetCursorModels()
+	case "cline":
+		// Cline is known, but all of its model definitions are fetched live.
+		return []*ModelInfo{}
 	case "xai", "x-ai", "grok":
 		return GetXAIModels()
 	case "devin":
 		return GetDevinModels()
+	case "mistral":
+		return GetMistralModels()
+	case "commandcode", "command-code":
+		return GetCommandCodeModels()
+	case "freebuff":
+		return GetFreebuffModels()
+	case "opencode":
+		return GetOpenCodeModels()
+	case "mimocode", "mimo-code":
+		return GetMimocodeModels()
 	case "meta", "muse":
 		return GetMetaModels()
 	default:
 		return nil
+	}
+}
+
+// GetCursorModels returns the fallback Cursor model definitions.
+func GetCursorModels() []*ModelInfo {
+	return []*ModelInfo{
+		{ID: "composer-2.5", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Composer 2.5", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "composer-2", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Composer 2", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "grok-4.5-high", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Grok 4.5", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "grok-4.6-xhigh", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Grok 4.6", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "grok-4.5-fast", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Grok 4.5 Fast", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "grok-4.6-fast", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Grok 4.6 Fast", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "claude-4-sonnet", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Claude 4 Sonnet", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "claude-3.5-sonnet", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Claude 3.5 Sonnet", ContextLength: 200000, MaxCompletionTokens: 8192},
+		{ID: "claude-opus-5", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Claude Opus 5", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "kimi-k3", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Kimi K3", ContextLength: 200000, MaxCompletionTokens: 64000, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
+		{ID: "gpt-4o", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "GPT-4o", ContextLength: 128000, MaxCompletionTokens: 16384},
+		{ID: "cursor-small", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Cursor Small", ContextLength: 200000, MaxCompletionTokens: 64000},
+		{ID: "gemini-2.5-pro", Object: "model", OwnedBy: "cursor", Type: "cursor", DisplayName: "Gemini 2.5 Pro", ContextLength: 1000000, MaxCompletionTokens: 65536, Thinking: &ThinkingSupport{Max: 50000, DynamicAllowed: true}},
 	}
 }
 
@@ -569,14 +883,24 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 	allModels := [][]*ModelInfo{
 		data.Claude,
 		data.Gemini,
+		data.GeminiCLI,
 		data.Vertex,
 		data.AIStudio,
 		data.CodexPro,
 		data.Kimi,
 		data.Antigravity,
+		GetGitHubCopilotModels(),
+		GetKiroModels(),
+		GetKiloModels(),
+		GetAmazonQModels(),
+		GetCodeBuddyModels(),
+		GetCursorModels(),
 		data.XAI,
+		data.Mistral,
+		data.Devin,
+		staticDevinModels,
 		GetDevinModels(),
-		GetMetaModels(),
+		data.Meta,
 	}
 	for _, models := range allModels {
 		for _, m := range models {
@@ -587,4 +911,610 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 	}
 
 	return nil
+}
+
+// LookupStaticModelInfoForProvider searches static model definitions for a provider only.
+// Returns nil if the provider has no static definitions or no matching model is found.
+func LookupStaticModelInfoForProvider(modelID string, provider string) *ModelInfo {
+	if modelID == "" {
+		return nil
+	}
+	for _, m := range GetStaticModelDefinitionsByChannel(provider) {
+		if m != nil && m.ID == modelID {
+			return cloneModelInfo(m)
+		}
+	}
+	return nil
+}
+
+// defaultCopilotClaudeContextLength is the conservative prompt token limit for
+// Claude models accessed via the GitHub Copilot API. Individual accounts are
+// capped at 128K; business accounts at 168K. When the dynamic /models API fetch
+// succeeds, the real per-account limit overrides this value. This constant is
+// only used as a safe fallback.
+const defaultCopilotClaudeContextLength = 128000
+
+// GetGitHubCopilotModels returns conservative fallback models for GitHub Copilot.
+// Credential-specific availability should come from the Copilot /models API;
+// this static fallback intentionally keeps only models we allow advertising.
+func GetGitHubCopilotModels() []*ModelInfo {
+	now := int64(1732752000) // 2024-11-27
+	copilotClaudeEndpoints := []string{"/chat/completions", "/messages"}
+
+	return []*ModelInfo{
+		{
+			ID:                  "claude-haiku-4.5",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Claude Haiku 4.5",
+			Description:         "Anthropic Claude Haiku 4.5 via GitHub Copilot",
+			ContextLength:       defaultCopilotClaudeContextLength,
+			MaxCompletionTokens: 64000,
+			SupportedEndpoints:  copilotClaudeEndpoints,
+		},
+		{
+			ID:                  "gemini-2.5-pro",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Gemini 2.5 Pro",
+			Description:         "Google Gemini 2.5 Pro via GitHub Copilot",
+			ContextLength:       1048576,
+			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "gemini-3-pro-preview",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Gemini 3 Pro (Preview)",
+			Description:         "Google Gemini 3 Pro Preview via GitHub Copilot",
+			ContextLength:       1048576,
+			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "gemini-3.1-pro-preview",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Gemini 3.1 Pro (Preview)",
+			Description:         "Google Gemini 3.1 Pro Preview via GitHub Copilot",
+			ContextLength:       173000,
+			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "gemini-3-flash-preview",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Gemini 3 Flash (Preview)",
+			Description:         "Google Gemini 3 Flash Preview via GitHub Copilot",
+			ContextLength:       173000,
+			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+	}
+}
+
+// IsAllowedGitHubCopilotModel reports Copilot models that may be advertised even
+// when GitHub's /models endpoint returns additional unsupported models.
+func IsAllowedGitHubCopilotModel(modelID string) bool {
+	switch strings.ToLower(strings.TrimSpace(modelID)) {
+	case "claude-haiku-4.5",
+		"gemini-2.5-pro",
+		"gemini-3-pro-preview",
+		"gemini-3.1-pro-preview",
+		"gemini-3-flash-preview":
+		return true
+	default:
+		return false
+	}
+}
+
+// GetKiroModels returns the Kiro (AWS CodeWhisperer) model definitions
+func GetKiroModels() []*ModelInfo {
+	return []*ModelInfo{
+		// --- Base Models ---
+		{
+			ID:                  "kiro-auto",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Auto",
+			Description:         "Automatic model selection by Kiro",
+			ContextLength:       1000000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-opus-4-6",
+			Object:              "model",
+			Created:             1736899200, // 2025-01-15
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Opus 4.6",
+			Description:         "Claude Opus 4.6 via Kiro (2.2x credit)",
+			ContextLength:       1000000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-opus-4-7",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Opus 4.7",
+			Description:         "Claude Opus 4.7 via Kiro (1.5x billing, 666667 effective context)",
+			ContextLength:       666667,
+			MaxCompletionTokens: 128000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-opus-4-8",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Opus 4.8",
+			Description:         "Claude Opus 4.8 via Kiro (1.5x billing, 666667 effective context)",
+			ContextLength:       666667,
+			MaxCompletionTokens: 128000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-opus-5",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Opus 5",
+			Description:         "Claude Opus 5 via Kiro (1.5x billing, 666667 effective context)",
+			ContextLength:       666667,
+			MaxCompletionTokens: 128000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-4-6",
+			Object:              "model",
+			Created:             1739836800, // 2025-02-18
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 4.6",
+			Description:         "Claude Sonnet 4.6 via Kiro (1.3x credit)",
+			ContextLength:       1000000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-opus-4-5",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Opus 4.5",
+			Description:         "Claude Opus 4.5 via Kiro (2.2x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-4-5",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 4.5",
+			Description:         "Claude Sonnet 4.5 via Kiro (1.3x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-4",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 4",
+			Description:         "Claude Sonnet 4 via Kiro (1.3x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-haiku-4-5",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Haiku 4.5",
+			Description:         "Claude Haiku 4.5 via Kiro (0.4x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		// --- 第三方模型 (通过 Kiro 接入) ---
+		{
+			ID:                  "kiro-deepseek-3-2",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro DeepSeek 3.2",
+			Description:         "DeepSeek 3.2 via Kiro",
+			ContextLength:       164000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-minimax-m2-1",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro MiniMax M2.1",
+			Description:         "MiniMax M2.1 via Kiro",
+			ContextLength:       196000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-qwen3-coder-next",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Qwen3 Coder Next",
+			Description:         "Qwen3 Coder Next via Kiro",
+			ContextLength:       256000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-5",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 5",
+			Description:         "Claude Sonnet 5 via Kiro (adaptive thinking)",
+			ContextLength:       666667,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 120000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-5-thinking",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 5 (Thinking)",
+			Description:         "Claude Sonnet 5 via Kiro with adaptive thinking",
+			ContextLength:       666667,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 120000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-minimax-m2-5",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro MiniMax M2.5",
+			Description:         "MiniMax M2.5 via Kiro",
+			ContextLength:       196000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-glm-5",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GLM-5",
+			Description:         "GLM-5 via Kiro",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-gpt-5-6-sol",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GPT-5.6 Sol",
+			Description:         "GPT-5.6 Sol via Kiro (native reasoning)",
+			ContextLength:       272000,
+			MaxCompletionTokens: 128000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: true, DynamicAllowed: true, Levels: []string{"low", "medium", "high", "xhigh", "max"}},
+		},
+		{
+			ID:                  "kiro-gpt-5-6-terra",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GPT-5.6 Terra",
+			Description:         "GPT-5.6 Terra via Kiro (native reasoning)",
+			ContextLength:       272000,
+			MaxCompletionTokens: 128000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: true, DynamicAllowed: true, Levels: []string{"low", "medium", "high", "xhigh", "max"}},
+		},
+		{
+			ID:                  "kiro-gpt-5-6-luna",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GPT-5.6 Luna",
+			Description:         "GPT-5.6 Luna via Kiro (native reasoning)",
+			ContextLength:       272000,
+			MaxCompletionTokens: 128000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: true, DynamicAllowed: true, Levels: []string{"low", "medium", "high", "xhigh", "max"}},
+		},
+		{
+			ID:                  "kiro-gpt-4o",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GPT-4o",
+			Description:         "OpenAI GPT-4o via Kiro",
+			ContextLength:       128000,
+			MaxCompletionTokens: 16384,
+		},
+		{
+			ID:                  "kiro-gpt-4",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GPT-4",
+			Description:         "OpenAI GPT-4 via Kiro",
+			ContextLength:       128000,
+			MaxCompletionTokens: 8192,
+		},
+		{
+			ID:                  "kiro-gpt-4-turbo",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GPT-4 Turbo",
+			Description:         "OpenAI GPT-4 Turbo via Kiro",
+			ContextLength:       128000,
+			MaxCompletionTokens: 16384,
+		},
+		{
+			ID:                  "kiro-gpt-3-5-turbo",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GPT-3.5 Turbo",
+			Description:         "OpenAI GPT-3.5 Turbo via Kiro",
+			ContextLength:       16384,
+			MaxCompletionTokens: 4096,
+		},
+		// --- Agentic Variants (Optimized for coding agents with chunked writes) ---
+		{
+			ID:                  "kiro-claude-opus-4-6-agentic",
+			Object:              "model",
+			Created:             1736899200, // 2025-01-15
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Opus 4.6 (Agentic)",
+			Description:         "Claude Opus 4.6 optimized for coding agents (chunked writes)",
+			ContextLength:       1000000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-4-6-agentic",
+			Object:              "model",
+			Created:             1739836800, // 2025-02-18
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 4.6 (Agentic)",
+			Description:         "Claude Sonnet 4.6 optimized for coding agents (chunked writes)",
+			ContextLength:       1000000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-5-agentic",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 5 (Agentic)",
+			Description:         "Claude Sonnet 5 optimized for coding agents (chunked writes)",
+			ContextLength:       666667,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 120000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-minimax-m2-5-agentic",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro MiniMax M2.5 (Agentic)",
+			Description:         "MiniMax M2.5 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-glm-5-agentic",
+			Object:              "model",
+			Created:             1743465600,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro GLM-5 (Agentic)",
+			Description:         "GLM-5 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-opus-4-5-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Opus 4.5 (Agentic)",
+			Description:         "Claude Opus 4.5 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-4-5-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 4.5 (Agentic)",
+			Description:         "Claude Sonnet 4.5 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-sonnet-4-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Sonnet 4 (Agentic)",
+			Description:         "Claude Sonnet 4 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-claude-haiku-4-5-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Claude Haiku 4.5 (Agentic)",
+			Description:         "Claude Haiku 4.5 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-deepseek-3-2-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro DeepSeek 3.2 (Agentic)",
+			Description:         "DeepSeek 3.2 optimized for coding agents (chunked writes)",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-minimax-m2-1-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro MiniMax M2.1 (Agentic)",
+			Description:         "MiniMax M2.1 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-qwen3-coder-next-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Qwen3 Coder Next (Agentic)",
+			Description:         "Qwen3 Coder Next optimized for coding agents (chunked writes)",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+	}
+}
+
+// GetAmazonQModels returns the Amazon Q (AWS CodeWhisperer) model definitions.
+// These models use the same API as Kiro and share the same executor.
+func GetAmazonQModels() []*ModelInfo {
+	return []*ModelInfo{
+		{
+			ID:                  "amazonq-auto",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro", // Uses Kiro executor - same API
+			DisplayName:         "Amazon Q Auto",
+			Description:         "Automatic model selection by Amazon Q",
+			ContextLength:       1000000,
+			MaxCompletionTokens: 64000,
+		},
+		{
+			ID:                  "amazonq-claude-opus-4.5",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Amazon Q Claude Opus 4.5",
+			Description:         "Claude Opus 4.5 via Amazon Q (2.2x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+		},
+		{
+			ID:                  "amazonq-claude-sonnet-4.5",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Amazon Q Claude Sonnet 4.5",
+			Description:         "Claude Sonnet 4.5 via Amazon Q (1.3x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+		},
+		{
+			ID:                  "amazonq-claude-sonnet-4",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Amazon Q Claude Sonnet 4",
+			Description:         "Claude Sonnet 4 via Amazon Q (1.3x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+		},
+		{
+			ID:                  "amazonq-claude-haiku-4.5",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Amazon Q Claude Haiku 4.5",
+			Description:         "Claude Haiku 4.5 via Amazon Q (0.4x credit)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+		},
+	}
 }

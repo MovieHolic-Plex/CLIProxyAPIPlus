@@ -40,7 +40,7 @@ func TestCodexClientModelsClaudeToolSearchFollowsSwitch(t *testing.T) {
 	handler := NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&config.SDKConfig{}, manager))
 	searchFlag := func() bool {
 		t.Helper()
-		for _, entry := range handler.codexClientModelsResponse("0.153.4")["models"].([]map[string]any) {
+		for _, entry := range handler.codexClientModelsResponse(handler.Models(), "0.153.4")["models"].([]map[string]any) {
 			if entry["slug"] == model {
 				search, _ := entry["supports_search_tool"].(bool)
 				return search
