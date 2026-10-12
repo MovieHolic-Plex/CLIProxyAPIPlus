@@ -566,7 +566,7 @@ func (e *AntigravityExecutor) convertStreamToNonStream(stream []byte) []byte {
 	}
 
 	for _, line := range bytes.Split(stream, []byte("\n")) {
-		trimmed := bytes.TrimSpace(line)
+		trimmed := helps.JSONPayload(line)
 		if len(trimmed) == 0 || !gjson.ValidBytes(trimmed) {
 			continue
 		}
