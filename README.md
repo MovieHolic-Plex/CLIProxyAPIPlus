@@ -181,12 +181,14 @@ OpenCode has a **dedicated executor** (`OpenCodeExecutor`) instead of the `opena
 **What the gateway checks (measured against the live endpoint):**
 
 - `Authorization: Bearer <key>` — no key (or `public`) means *anonymous*, which is the tier the free models live in.
-- `User-Agent` must start with `opencode/` (the CLI sends `opencode/<version> ai-sdk/provider-utils/<v> runtime/bun/<v>`).
-- `x-opencode-client`, `x-opencode-session` and `x-opencode-request` must be present; `x-opencode-project` completes the fingerprint.
+- `User-Agent` must start with `opencode/` (OpenCode 2.x sends `opencode/<channel>/<version>/<client>`, e.g. `opencode/latest/2.0.27/cli`).
+- `x-opencode-session` (or `X-Session-Id` / `x-session-affinity`, which the CLI sets to the same value) must be present; `x-opencode-client` and `x-opencode-project` complete the fingerprint.
 - The request body must declare both the `bash` **and** `read` tools, and must carry `"stream": true` — the free tier is served over SSE only, so a buffered request is rejected the same way.
-- `x-opencode-session` / `x-opencode-request` must match the OpenCode identifier shape exactly: 26 characters of 12 lowercase hex digits (a millisecond timestamp packed with a counter) followed by 14 base62 characters. Malformed identifiers are rejected even when every other signal is correct. Missing either tool, missing the identity headers, or a non-streaming body returns `403 FreeTierError: OpenCode's free tier can only be used from within OpenCode`.
+- The session id must match the OpenCode session identifier exactly: `ses_` plus 26 characters of 12 lowercase hex digits followed by 14 base62 characters, where the hex segment is the **bit-inverted** (descending) `millisecond << 12 | counter` value the CLI's `SessionID.create()` produces. UUIDs and ascending ids are rejected even when every other signal is correct. Missing either tool, missing the identity headers, or a non-streaming body returns `403 FreeTierError: OpenCode's free tier can only be used from within OpenCode`.
 
 The executor mirrors the headers on every call and appends minimal `bash`/`read` tool definitions **only** when the client omitted them and the upstream model is a free-tier model (`big-pickle` or any `*-free`); paid models and payloads that already carry both tools are forwarded untouched. For the same free-tier models it asks the gateway to stream and folds the SSE back into a buffered completion, so a non-streaming client request still succeeds.
+
+The `jev-*` models are System One evaluation models, not chat models: the gateway answers `ModelProtocolUnsupported` for them on `/chat/completions`. Call them through `POST /v1/systemone`; the executor forwards that payload to `{base-url}/systemone` (the route OpenCode itself uses) with the configured upstream model name.
 
 `models` is a whitelist and it is required: OpenCode publishes vendor-neutral names (`claude-opus-5`, `gpt-5.5`, ...) that collide with the catalogs of every other provider, so an entry without `models` registers nothing instead of claiming those shared names. Browse the catalog with `GET {base-url}/models` (it answers anonymously) or the model discovery button in the Management Center, then list the models to expose. Point `base-url` at `https://opencode.ai/zen/go/v1` for the Go subscription tier.
 

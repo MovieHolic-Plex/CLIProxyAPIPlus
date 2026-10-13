@@ -78,6 +78,10 @@ func TestApplyOpencodeZenFingerprint(t *testing.T) {
 	if got := req.Header.Get("x-opencode-client"); got != "cli" {
 		t.Errorf("x-opencode-client = %q, want cli", got)
 	}
+	// No body or seed: the random fallback must still be a descending CLI id.
+	if _, counter := decodeOpenCodeStamp(t, req.Header.Get("x-opencode-session"), true); counter == 0 {
+		t.Errorf("x-opencode-session = %q, want a descending ses_ identifier", req.Header.Get("x-opencode-session"))
+	}
 
 	// Non-Zen upstream stays untouched.
 	req2, _ := http.NewRequest(http.MethodPost, "https://api.openrouter.ai/v1/chat/completions", nil)
@@ -88,6 +92,28 @@ func TestApplyOpencodeZenFingerprint(t *testing.T) {
 	}
 	if got := req2.Header.Get("User-Agent"); got != "cli-proxy-openai-compat" {
 		t.Errorf("non-zen UA changed: %q", got)
+	}
+}
+
+// The free-tier gate rejects UUID and ascending session ids; hash-derived
+// sessions must decode as descending CLI ids with counter 1.
+func TestOpencodeHashSessionUsesDescendingCLIShape(t *testing.T) {
+	for _, seed := range []string{"a", "credential:public", "client-session:conversation-a"} {
+		id := opencodeHashSession(seed)
+		if !strings.HasPrefix(id, "ses_") {
+			t.Fatalf("opencodeHashSession(%q) = %q, want an ses_ identifier", seed, id)
+		}
+		ms, counter := decodeOpenCodeStamp(t, id, true)
+		if counter != 1 {
+			t.Fatalf("opencodeHashSession(%q) = %q decodes counter %d, want 1", seed, id, counter)
+		}
+		// The segment keeps the low 36 bits of the time.
+		if offset := (ms - opencodeHashSessionEpochMs) & (1<<36 - 1); offset >= 365*24*60*60*1000 {
+			t.Fatalf("opencodeHashSession(%q) = %q decodes time %d outside the anchored year", seed, id, ms)
+		}
+		if opencodeHashSession(seed) != id {
+			t.Fatalf("opencodeHashSession(%q) must be deterministic", seed)
+		}
 	}
 }
 

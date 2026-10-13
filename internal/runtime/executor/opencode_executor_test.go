@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -12,8 +13,41 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/tidwall/gjson"
 )
+
+// decodeOpenCodeStamp returns the (milliseconds, counter) pair packed in an
+// OpenCode identifier, undoing the bit inversion of descending ids.
+func decodeOpenCodeStamp(t *testing.T, id string, descending bool) (uint64, uint64) {
+	t.Helper()
+	_, body, ok := strings.Cut(id, "_")
+	if !ok || len(body) != 26 {
+		t.Fatalf("identifier %q must be <prefix>_<26 characters>", id)
+	}
+	stamp, err := strconv.ParseUint(body[:12], 16, 64)
+	if err != nil || strings.ToLower(body[:12]) != body[:12] {
+		t.Fatalf("timestamp segment %q must be lowercase hex: %v", body[:12], err)
+	}
+	for _, char := range body[12:] {
+		if !strings.ContainsRune(openCodeIDTailAlphabet, char) {
+			t.Fatalf("tail %q contains %q outside the base62 alphabet", body[12:], char)
+		}
+	}
+	if descending {
+		stamp = ^stamp & 0xffffffffffff
+	}
+	return stamp >> 12, stamp & 0xfff
+}
+
+// openCodeStampDelta returns the absolute distance between a decoded stamp
+// and a millisecond time, both taken modulo 2^36 (the segment keeps only the
+// low 36 bits of the time).
+func openCodeStampDelta(stamp, ms uint64) uint64 {
+	const mask = 1<<36 - 1
+	forward := (stamp - ms) & mask
+	return min(forward, (ms-stamp)&mask)
+}
 
 func openCodeTestAuth(attrs map[string]string) *cliproxyauth.Auth {
 	return &cliproxyauth.Auth{
@@ -45,8 +79,8 @@ func TestApplyOpenCodeHeaders_MirrorsCLIIdentity(t *testing.T) {
 			if got := req.Header.Get("Authorization"); got != tc.wantBearer {
 				t.Fatalf("Authorization = %q, want %q", got, tc.wantBearer)
 			}
-			if got := req.Header.Get("User-Agent"); !strings.HasPrefix(got, "opencode/") {
-				t.Fatalf("User-Agent = %q, want an opencode/<version> prefix (the free-tier gate matches it)", got)
+			if got := req.Header.Get("User-Agent"); got != "opencode/latest/"+openCodeVersion+"/cli" {
+				t.Fatalf("User-Agent = %q, want the CLI's opencode/<channel>/<version>/<client> form", got)
 			}
 			if got := req.Header.Get("x-opencode-client"); got == "" {
 				t.Fatal("x-opencode-client must be set")
@@ -54,15 +88,24 @@ func TestApplyOpenCodeHeaders_MirrorsCLIIdentity(t *testing.T) {
 			if got := req.Header.Get("x-opencode-project"); got == "" {
 				t.Fatal("x-opencode-project must be set")
 			}
-			for _, header := range []string{"x-opencode-session", "x-opencode-request"} {
-				value := req.Header.Get(header)
-				if !strings.HasPrefix(value, "ses_") && !strings.HasPrefix(value, "msg_") {
-					t.Fatalf("%s = %q, want an ses_/msg_ prefixed identifier", header, value)
-				}
-				if len(value) != 30 {
-					t.Fatalf("%s = %q, want prefix plus 26 ULID characters", header, value)
+			session := req.Header.Get("x-opencode-session")
+			if !strings.HasPrefix(session, "ses_") {
+				t.Fatalf("x-opencode-session = %q, want an ses_ identifier", session)
+			}
+			// The free-tier gate rejects ascending session ids: the CLI creates
+			// sessions with descending ids, so the decoded time must be now.
+			if ms, _ := decodeOpenCodeStamp(t, session, true); openCodeStampDelta(ms, uint64(time.Now().UnixMilli())) > 5_000 {
+				t.Fatalf("x-opencode-session %q is not a descending identifier for the current time", session)
+			}
+			for _, header := range []string{"x-opencode-session-id", "x-session-affinity", "X-Session-Id"} {
+				if got := req.Header.Get(header); got != session {
+					t.Fatalf("%s = %q, want the session id %q", header, got, session)
 				}
 			}
+			if got := req.Header.Get("x-opencode-request"); !strings.HasPrefix(got, "msg_") {
+				t.Fatalf("x-opencode-request = %q, want an msg_ identifier", got)
+			}
+			decodeOpenCodeStamp(t, req.Header.Get("x-opencode-request"), false)
 			if got := req.Header.Get("Accept"); got != "text/event-stream" {
 				t.Fatalf("Accept = %q, want text/event-stream for streaming calls", got)
 			}
@@ -72,37 +115,65 @@ func TestApplyOpenCodeHeaders_MirrorsCLIIdentity(t *testing.T) {
 
 func TestNewOpenCodeIdentifier_MatchesSchemaShape(t *testing.T) {
 	now := time.Now().UnixMilli()
-	first := newOpenCodeIdentifier("ses")
-	second := newOpenCodeIdentifier("ses")
-	if first == second {
-		t.Fatalf("identifiers must not repeat: %q", first)
+	// The 48 bit segment packs (milliseconds << 12 | counter), so the high
+	// 36 bits must track the current time modulo 2^36.
+	want := ((uint64(now) << 12) & 0xffffffffffff) >> 12
+	for _, descending := range []bool{false, true} {
+		first := newOpenCodeIdentifier("ses", descending)
+		second := newOpenCodeIdentifier("ses", descending)
+		if first == second {
+			t.Fatalf("identifiers must not repeat: %q", first)
+		}
+		for _, id := range []string{first, second} {
+			ms, counter := decodeOpenCodeStamp(t, id, descending)
+			if delta := int64(ms) - int64(want); delta < -5_000 || delta > 5_000 {
+				t.Fatalf("%q (descending=%v) encodes %d, want a value near %d", id, descending, ms, want)
+			}
+			if counter == 0 {
+				t.Fatalf("%q (descending=%v) must carry a counter starting at 1", id, descending)
+			}
+		}
 	}
+}
 
-	for _, id := range []string{first, second} {
-		body := strings.TrimPrefix(id, "ses_")
-		if len(body) != 26 {
-			t.Fatalf("identifier body = %q, want 26 characters", body)
+func TestOpenCodeExecutor_SystemOneAltUsesSystemOneRoute(t *testing.T) {
+	var gotPath, gotModel, gotSession string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotSession = r.Header.Get("x-opencode-session")
+		body, _ := io.ReadAll(r.Body)
+		gotModel = gjson.GetBytes(body, "model").String()
+		if !gjson.GetBytes(body, "questions.q1").Exists() || gjson.GetBytes(body, "messages").Exists() {
+			t.Errorf("System One payload must be forwarded without chat translation: %s", body)
 		}
-		for _, char := range body[:12] {
-			if !strings.ContainsRune("0123456789abcdef", char) {
-				t.Fatalf("timestamp segment %q must be lowercase hex (got %q)", body[:12], char)
-			}
-		}
-		for _, char := range body[12:] {
-			if !strings.ContainsRune(openCodeIDTailAlphabet, char) {
-				t.Fatalf("tail %q contains %q outside the base62 alphabet", body[12:], char)
-			}
-		}
-		stamp, err := strconv.ParseUint(body[:12], 16, 64)
-		if err != nil {
-			t.Fatalf("timestamp segment %q must parse as hex: %v", body[:12], err)
-		}
-		// The 48 bit segment packs (milliseconds << 12 | counter), so the high
-		// 36 bits must track the current time modulo 2^36.
-		masked := (uint64(now) << 12) & 0xffffffffffff
-		if delta := int64(stamp>>12) - int64(masked>>12); delta < -5_000 || delta > 5_000 {
-			t.Fatalf("timestamp segment encodes %d, want a value near %d", stamp>>12, masked>>12)
-		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"jev-1.13-free","answers":{"q1":{"type":"noul","noul":0.88}},"usage":{"input_tokens":276,"output_tokens":21}}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{OpenCodeKey: []config.OpenCodeKey{{
+		APIKey: "public",
+		Models: []config.OpenCodeModel{{Name: "jev-1.13-free", Alias: "jev-latest"}},
+	}}}
+	auth := openCodeTestAuth(map[string]string{"api_key": "public", "base_url": server.URL})
+	resp, err := NewOpenCodeExecutor(cfg).Execute(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "jev-latest",
+		Payload: []byte(`{"model":"jev-latest","state":"The sky is blue.","questions":{"q1":{"type":"noul","instructions":"Is it true?"}}}`),
+	}, cliproxyexecutor.Options{Alt: "systemone"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotPath != "/systemone" {
+		t.Fatalf("path = %q, want /systemone", gotPath)
+	}
+	if gotModel != "jev-1.13-free" {
+		t.Fatalf("model = %q, want the configured upstream name jev-1.13-free", gotModel)
+	}
+	if !strings.HasPrefix(gotSession, "ses_") {
+		t.Fatalf("x-opencode-session = %q, want the CLI identity headers", gotSession)
+	}
+	if got := gjson.GetBytes(resp.Payload, "answers.q1.noul").Float(); got != 0.88 {
+		t.Fatalf("response must be returned verbatim, got %s", resp.Payload)
 	}
 }
 

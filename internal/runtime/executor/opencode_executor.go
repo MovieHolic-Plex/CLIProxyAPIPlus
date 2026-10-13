@@ -30,14 +30,17 @@ const (
 	openCodeDefaultBaseURL = "https://opencode.ai/zen/v1"
 	openCodeChatEndpoint   = "/chat/completions"
 	openCodeModelsEndpoint = "/models"
+	// openCodeSystemOneEndpoint is the System One evaluation route. OpenCode
+	// sends its jev-* evaluation models here (packages/ai SystemOne.model);
+	// the gateway answers ModelProtocolUnsupported for them on /chat/completions.
+	openCodeSystemOneEndpoint = "/systemone"
 
 	// openCodeVersion is the client version mirrored in the User-Agent. The
 	// free-tier gate only matches the "opencode/" prefix, but the proxy keeps
 	// a real release version so the request stays indistinguishable.
-	openCodeVersion = "1.18.31"
-	// openCodeUserAgentSuffix mirrors the AI SDK suffix the CLI appends after
-	// the version token (opencode/<version> <suffix>).
-	openCodeUserAgentSuffix = "ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.0"
+	openCodeVersion = "2.0.27"
+	// openCodeChannel mirrors OPENCODE_CHANNEL of release builds.
+	openCodeChannel = "latest"
 	// openCodeClient mirrors OPENCODE_CLIENT, which the CLI defaults to "cli".
 	openCodeClient = "cli"
 	// openCodeProject mirrors the project id the CLI reports for an instance
@@ -95,6 +98,9 @@ func (e *OpenCodeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.A
 
 // Execute performs a non-streaming request against the OpenCode gateway.
 func (e *OpenCodeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
+	if opts.Alt == openAICompatSystemOneAlt {
+		return e.executeSystemOne(ctx, auth, req)
+	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	baseModel = resolveOpenCodeModelName(e.cfg, auth, baseModel)
 
@@ -293,6 +299,81 @@ func (e *OpenCodeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 	}, nil
 }
 
+// executeSystemOne forwards a native System One evaluation payload to
+// POST <baseURL>/systemone, the route OpenCode uses for its jev-* models, and
+// returns the upstream JSON verbatim. Only the model is rewritten to the
+// configured upstream name.
+func (e *OpenCodeExecutor) executeSystemOne(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request) (resp cliproxyexecutor.Response, err error) {
+	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	baseModel = resolveOpenCodeModelName(e.cfg, auth, baseModel)
+
+	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
+	defer reporter.trackFailure(ctx, &err)
+
+	payload := bytes.Clone(req.Payload)
+	if gjson.GetBytes(payload, "model").Exists() {
+		if next, errSet := sjson.SetBytes(payload, "model", baseModel); errSet == nil {
+			payload = next
+		}
+	}
+
+	url := openCodeBaseURL(auth) + openCodeSystemOneEndpoint
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return resp, err
+	}
+	applyOpenCodeHeaders(httpReq, openCodeAPIKey(auth), false)
+	var attrs map[string]string
+	if auth != nil {
+		attrs = auth.Attributes
+	}
+	util.ApplyCustomHeadersFromAttrs(httpReq, attrs)
+
+	var authID, authLabel, authType, authValue string
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+		URL:       url,
+		Method:    http.MethodPost,
+		Headers:   httpReq.Header.Clone(),
+		Body:      payload,
+		Provider:  e.Identifier(),
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
+
+	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
+		return resp, err
+	}
+	defer httpResp.Body.Close()
+
+	recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(httpResp.Body, openCodeMaxErrorBody))
+		appendAPIResponseChunk(ctx, e.cfg, b)
+		return resp, statusErr{code: httpResp.StatusCode, msg: string(b)}
+	}
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
+		return resp, err
+	}
+	appendAPIResponseChunk(ctx, e.cfg, body)
+
+	reporter.publish(ctx, parseOpenAIUsage(body))
+	reporter.ensurePublished(ctx)
+	return cliproxyexecutor.Response{Payload: body, Headers: httpResp.Header.Clone()}, nil
+}
+
 // Refresh returns the auth unchanged. OpenCode keys are long-lived; the Go
 // tier subscription key has no refresh endpoint.
 func (e *OpenCodeExecutor) Refresh(_ context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
@@ -338,14 +419,24 @@ func openCodeChatURL(auth *cliproxyauth.Auth) string {
 }
 
 // applyOpenCodeHeaders mirrors the headers the OpenCode client sends to its own
-// gateway. The free-tier gate rejects requests that do not carry the identity
-// headers, and the CLI always streams, so Accept follows the call shape.
+// gateway (packages/core/src/session/model-request.ts). The free-tier gate
+// rejects requests that do not carry the identity headers, and the CLI always
+// streams, so Accept follows the call shape.
+//
+// The session id must be a descending identifier, exactly like the CLI's
+// SessionID.create(): the gate decodes it and treats an ascending (or
+// otherwise malformed) id as a foreign client. The CLI sends the same session
+// id on four headers.
 func applyOpenCodeHeaders(req *http.Request, apiKey string, stream bool) {
+	session := newOpenCodeIdentifier("ses", true)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", openCodeUserAgent())
 	req.Header.Set("x-opencode-client", openCodeClient)
-	req.Header.Set("x-opencode-session", newOpenCodeIdentifier("ses"))
-	req.Header.Set("x-opencode-request", newOpenCodeIdentifier("msg"))
+	req.Header.Set("x-opencode-session", session)
+	req.Header.Set("x-opencode-session-id", session)
+	req.Header.Set("x-session-affinity", session)
+	req.Header.Set("X-Session-Id", session)
+	req.Header.Set("x-opencode-request", newOpenCodeIdentifier("msg", false))
 	req.Header.Set("x-opencode-project", openCodeProject)
 	if apiKey == "" {
 		apiKey = openCodePublicKey
@@ -358,14 +449,15 @@ func applyOpenCodeHeaders(req *http.Request, apiKey string, stream bool) {
 	}
 }
 
-// openCodeUserAgent builds the UA the CLI sends. OPENCODE_CLI_VERSION overrides
-// the mirrored release version when the upstream gate moves on.
+// openCodeUserAgent builds the UA the CLI sends (App.useragent:
+// opencode/<channel>/<version>/<client>). OPENCODE_CLI_VERSION overrides the
+// mirrored release version when the upstream gate moves on.
 func openCodeUserAgent() string {
 	version := openCodeVersion
 	if override := strings.TrimSpace(os.Getenv("OPENCODE_CLI_VERSION")); override != "" {
 		version = override
 	}
-	return "opencode/" + version + " " + openCodeUserAgentSuffix
+	return "opencode/" + openCodeChannel + "/" + version + "/" + openCodeClient
 }
 
 // resolveOpenCodeModelName maps a configured alias to its upstream model name.
@@ -503,8 +595,9 @@ var openCodeIDCounter struct {
 // emits: <prefix>_<12 lowercase hex characters><14 base62 characters>. The
 // gateway parses this segment, and requests that carry a malformed session or
 // request id are treated as foreign clients and rejected with the free-tier
-// error, so the shape is part of the wire contract.
-func newOpenCodeIdentifier(prefix string) string {
+// error, so the shape is part of the wire contract. Session ids are
+// descending (the timestamp segment is bit-inverted), message ids ascending.
+func newOpenCodeIdentifier(prefix string, descending bool) string {
 	ms := time.Now().UnixMilli()
 	openCodeIDCounter.Lock()
 	if ms != openCodeIDCounter.lastMs {
@@ -518,7 +611,11 @@ func newOpenCodeIdentifier(prefix string) string {
 	// 48 bit timestamp segment: (ms << 12 | counter) truncated to 48 bits,
 	// rendered as 12 lowercase hex characters — the same packing (and the same
 	// truncation) the schema identifier applies.
-	current := ((uint64(ms) << 12) | counter) & 0xffffffffffff
+	current := (uint64(ms) << 12) | counter
+	if descending {
+		current = ^current
+	}
+	current &= 0xffffffffffff
 	var stamp [12]byte
 	const hexDigits = "0123456789abcdef"
 	for i := 5; i >= 0; i-- {
