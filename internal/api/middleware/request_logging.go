@@ -5,8 +5,10 @@ package middleware
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -53,6 +55,11 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 		// Capture request information
 		requestInfo, err := captureRequestInfo(c, captureBody)
 		if err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
+				return
+			}
 			// Log error but continue processing
 			// In a real implementation, you might want to use a proper logger here
 			c.Next()
@@ -333,7 +340,15 @@ func captureRequestInfo(c *gin.Context, captureBody bool) (*RequestInfo, error) 
 	if captureBody && c.Request.Body != nil {
 		// Read the body
 		originalBody := c.Request.Body
-		bodyBytes, err := io.ReadAll(io.LimitReader(originalBody, sdkhandlers.MaxEncodedRequestBodyBytes+1))
+		maxBytes := c.GetInt64(sdkhandlers.MaxRequestBodyBytesContextKey)
+		if maxBytes <= 0 {
+			maxBytes = sdkhandlers.MaxEncodedRequestBodyBytes
+		}
+		var reader io.Reader = originalBody
+		if maxBytes < math.MaxInt64 {
+			reader = io.LimitReader(originalBody, maxBytes+1)
+		}
+		bodyBytes, err := io.ReadAll(reader)
 		_ = originalBody.Close()
 		if err != nil {
 			return nil, err
@@ -341,7 +356,11 @@ func captureRequestInfo(c *gin.Context, captureBody bool) (*RequestInfo, error) 
 
 		// Restore the body for the actual request processing
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		body = decodeCapturedRequestBodyForLog(bodyBytes, c.Request.Header.Get("Content-Encoding"))
+		if maxBytes > 0 {
+			body = decodeCapturedRequestBodyForLogWithLimit(bodyBytes, c.Request.Header.Get("Content-Encoding"), maxBytes)
+		} else {
+			body = decodeCapturedRequestBodyForLog(bodyBytes, c.Request.Header.Get("Content-Encoding"))
+		}
 	}
 
 	return &RequestInfo{
@@ -440,7 +459,11 @@ func decodeCapturedZstdRequestBodyWithLimit(raw []byte, limit int64) ([]byte, bo
 	}
 	defer decoder.Close()
 
-	decoded, errRead := io.ReadAll(io.LimitReader(decoder, limit+1))
+	var reader io.Reader = decoder
+	if limit > 0 && limit < math.MaxInt64 {
+		reader = io.LimitReader(decoder, limit+1)
+	}
+	decoded, errRead := io.ReadAll(reader)
 	if errRead != nil {
 		return nil, false, fmt.Errorf("failed to decode zstd request body: %w", errRead)
 	}

@@ -98,7 +98,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	var errDial error
 	dialCtx := ctx
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
-		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, e.cfg, auth))
+		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth))
 		if conn == nil {
 			unlockStreamSession()
 			return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
@@ -768,8 +768,16 @@ type codexWebsocketPrepared struct {
 func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*codexWebsocketPrepared, error) {
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	apiKey, baseURL := codexCreds(auth)
+	if errSIWC := ensureCodexSIWCCredentials(auth, apiKey); errSIWC != nil {
+		return nil, errSIWC
+	}
+	useSIWC := codexUseSIWC(auth)
 	if baseURL == "" {
-		baseURL = "https://chatgpt.com/backend-api/codex"
+		if useSIWC {
+			baseURL = defaultOpenAISIWCBaseURL
+		} else {
+			baseURL = "https://chatgpt.com/backend-api/codex"
+		}
 	}
 	var err error
 	from := opts.SourceFormat
@@ -792,12 +800,17 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		return nil, err
 	}
 
+	hasExplicitInstructions := gjson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(gjson.GetBytes(req.Payload, "instructions").String()) != ""
 	finalizePayload := helps.NewPayloadFinalizer(codexPayloadConfigForAuth(e.cfg, auth), "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
-	body = normalizeCodexInstructions(body, preserveNativeOutput)
+	if !useSIWC {
+		body = normalizeCodexInstructions(body, preserveNativeOutput)
+	}
 	requestPath := helps.PayloadRequestPath(opts)
 	if imageMode := resolveCodexImageGenerationMode(e.cfg, auth); imageMode == config.DisableImageGenerationOff {
-		body = ensureImageGenerationTool(body, baseModel, auth, opts.Headers)
+		if !useSIWC {
+			body = ensureImageGenerationTool(body, baseModel, auth, opts.Headers)
+		}
 	} else {
 		body = helps.StripImageGenerationForMode(body, "", imageMode, requestPath)
 	}
@@ -821,7 +834,11 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	if errPromptCache != nil {
 		return nil, errPromptCache
 	}
-	body = finalizePayload(helps.SanitizeCodexInputItemIDs(body))
+	body = helps.SanitizeCodexInputItemIDs(body)
+	if useSIWC {
+		body = applyCodexSIWCWebsocketBodyRules(body, hasExplicitInstructions)
+	}
+	body = finalizePayload(body)
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
 	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, body, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)

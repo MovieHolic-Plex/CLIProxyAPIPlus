@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	copilotauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/copilot"
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/xai"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -119,7 +120,7 @@ func (h *Handler) APICall(c *gin.Context) {
 	if isCBOR {
 		rawBody, errRead := io.ReadAll(c.Request.Body)
 		if errRead != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
+			c.JSON(clienterror.HTTPStatusFromErrorOr(errRead, http.StatusBadRequest), gin.H{"error": "failed to read request body"})
 			return
 		}
 		if errUnmarshal := cbor.Unmarshal(rawBody, &body); errUnmarshal != nil {
@@ -128,7 +129,7 @@ func (h *Handler) APICall(c *gin.Context) {
 		}
 	} else {
 		if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+			c.JSON(clienterror.HTTPStatusFromErrorOr(errBindJSON, http.StatusBadRequest), gin.H{"error": "invalid body"})
 			return
 		}
 	}

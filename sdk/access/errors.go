@@ -13,6 +13,7 @@ const (
 	AuthErrorCodeNoCredentials     AuthErrorCode = "no_credentials"
 	AuthErrorCodeInvalidCredential AuthErrorCode = "invalid_credential"
 	AuthErrorCodeNotHandled        AuthErrorCode = "not_handled"
+	AuthErrorCodeRequestTooLarge   AuthErrorCode = "request_too_large"
 	AuthErrorCodeInternal          AuthErrorCode = "internal_error"
 )
 
@@ -83,6 +84,11 @@ func NewInvalidCredentialErrorForProvider(providerType string) *AuthError {
 
 func NewNotHandledError() *AuthError {
 	return newAuthError(AuthErrorCodeNotHandled, "authentication provider did not handle request", 0, nil)
+}
+
+// NewRequestEntityTooLargeError builds a 413 error when the request body exceeds the configured limit.
+func NewRequestEntityTooLargeError(cause error) *AuthError {
+	return newAuthError(AuthErrorCodeRequestTooLarge, "http: request body too large", http.StatusRequestEntityTooLarge, cause)
 }
 
 func NewInternalAuthError(message string, cause error) *AuthError {

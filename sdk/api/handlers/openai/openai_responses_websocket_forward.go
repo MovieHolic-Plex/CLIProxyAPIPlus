@@ -267,11 +267,13 @@ func completeResponsesWebsocketLocalInterrupt(
 		cancel(errSet)
 		return output, responseID, sortedStringSet(pendingToolCallIDs), nil, errSet
 	}
+	// Cancel the in-flight provider execution before writing the local
+	// interruption response. The client may immediately send the next turn,
+	// so the provider context must already be released when this frame lands.
+	cancel(context.Canceled)
 	if errWrite := writeResponsesWebsocketPayload(writer, wsTimelineLog, incomplete, time.Now()); errWrite != nil {
-		cancel(errWrite)
 		return output, responseID, sortedStringSet(pendingToolCallIDs), nil, errWrite
 	}
-	cancel(context.Canceled)
 	return output, responseID, sortedStringSet(pendingToolCallIDs), nil, nil
 }
 

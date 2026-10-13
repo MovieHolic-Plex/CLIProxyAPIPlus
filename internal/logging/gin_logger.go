@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"runtime/debug"
 	"strconv"
@@ -248,10 +249,23 @@ func GinLogrusLogger(configs ...*config.Config) gin.HandlerFunc {
 		var requestBody []byte
 		if isAIAPIPath(path) && c.Request.Body != nil {
 			originalBody := c.Request.Body
-			requestBody, _ = io.ReadAll(io.LimitReader(originalBody, maxGinCapturedAIRequestBodyBytes+1))
+			limit := int64(maxGinCapturedAIRequestBodyBytes)
+			if configured := c.GetInt64("maxRequestBodyBytes"); configured > 0 {
+				limit = configured
+			}
+			var reader io.Reader = originalBody
+			if limit < math.MaxInt64 {
+				reader = io.LimitReader(originalBody, limit+1)
+			}
+			var errRead error
+			requestBody, errRead = io.ReadAll(reader)
 			_ = originalBody.Close()
 			c.Request.Body = io.NopCloser(bytes.NewReader(requestBody))
 			c.Set(requestBodyKey, requestBody)
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(errRead, &maxBytesErr) {
+				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": errRead.Error()})
+			}
 		}
 
 		// Only generate request ID for AI API paths

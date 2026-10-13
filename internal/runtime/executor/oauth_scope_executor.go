@@ -24,9 +24,13 @@ func (e GeminiVertexExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
 	return &e
 }
 
-func (e OpenAICompatExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
-	e.cfg = e.cfg.ForAPIKey()
-	return &e
+func (e *OpenAICompatExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
+	return &OpenAICompatExecutor{
+		provider:           e.provider,
+		cfg:                e.cfg.ForAPIKey(),
+		developerRoleCache: e.developerRoleCacheInstance(),
+		now:                e.now,
+	}
 }
 
 func (e MetaExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
