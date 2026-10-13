@@ -1965,7 +1965,7 @@ func (m *Manager) promoteNextAntigravityPrimary(ctx context.Context, currentAuth
 	current.PrimaryInfo.IsPrimary = false
 	current.UpdatedAt = now
 	SyncPrimaryInfoMetadata(current)
-	_ = m.persist(ctx, current)
+	_ = m.persistLocked(ctx, current)
 
 	next := allAntigravity[nextIdx]
 	next.Disabled = false
@@ -1978,7 +1978,7 @@ func (m *Manager) promoteNextAntigravityPrimary(ctx context.Context, currentAuth
 	next.PrimaryInfo.IsPrimary = true
 	next.UpdatedAt = now
 	SyncPrimaryInfoMetadata(next)
-	_ = m.persist(ctx, next)
+	_ = m.persistLocked(ctx, next)
 
 	log.WithFields(log.Fields{
 		"old_primary": current.ID,
