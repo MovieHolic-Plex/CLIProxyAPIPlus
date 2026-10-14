@@ -540,3 +540,49 @@ func TestExecuteImageWithAuthManager_AllowsImageOnlyModels(t *testing.T) {
 		})
 	}
 }
+
+func TestGetRequestDetails_AudioTranscriptionModelDoesNotFallbackToChainOrCursor(t *testing.T) {
+	modelRegistry := registry.GetGlobalRegistry()
+	now := time.Now().Unix()
+	const fallbackAuthID = "test-transcribe-no-fallback-claude"
+	const cursorAuthID = "test-transcribe-no-fallback-cursor"
+	modelRegistry.RegisterClient(fallbackAuthID, "claude", []*registry.ModelInfo{{ID: "claude-sonnet-4", Created: now}})
+	modelRegistry.RegisterClient(cursorAuthID, "cursor", []*registry.ModelInfo{{ID: "claude-4-sonnet", Created: now}})
+	t.Cleanup(func() {
+		modelRegistry.UnregisterClient(fallbackAuthID)
+		modelRegistry.UnregisterClient(cursorAuthID)
+	})
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{
+		ID:       fallbackAuthID,
+		Provider: "claude",
+		Status:   coreauth.StatusActive,
+	}); err != nil {
+		t.Fatalf("Register claude auth: %v", err)
+	}
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{
+		ID:       cursorAuthID,
+		Provider: "cursor",
+		Status:   coreauth.StatusActive,
+	}); err != nil {
+		t.Fatalf("Register cursor auth: %v", err)
+	}
+
+	manager.SetFallbackModels(map[string]string{
+		"gemini-3.5-transcribe":      "claude-sonnet-4",
+		"gemini-3.5-transcribe-live": "claude-sonnet-4",
+	})
+	manager.SetFallbackChain([]string{"claude-sonnet-4"}, 3)
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager)
+
+	for _, model := range []string{"gemini-3.5-transcribe", "gemini-3.5-transcribe-live"} {
+		t.Run(model, func(t *testing.T) {
+			providers, resolvedModel, errMsg := handler.getRequestDetails(model)
+			if errMsg == nil {
+				t.Fatalf("getRequestDetails(%q) = (providers=%v, model=%q), want error when no gemini transcribe provider is available", model, providers, resolvedModel)
+			}
+		})
+	}
+}

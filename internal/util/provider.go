@@ -79,6 +79,10 @@ func GetProviderName(modelName string) []string {
 		return preferOpenAICompatOverClaude(modelName, providers)
 	}
 
+	if IsAudioTranscriptionOnlyModel(modelName) {
+		return providers
+	}
+
 	// Fallback: if cursor provider has registered models, route unknown models to it.
 	// Cursor acts as a universal proxy supporting multiple model families (Claude, GPT, Gemini, etc.).
 	if models := registry.GetGlobalRegistry().GetAvailableModelsByProvider("cursor"); len(models) > 0 {
@@ -86,6 +90,20 @@ func GetProviderName(modelName string) []string {
 	}
 
 	return providers
+}
+
+func IsAudioTranscriptionOnlyModel(modelName string) bool {
+	base := strings.ToLower(strings.TrimSpace(modelName))
+	if base == "" {
+		return false
+	}
+	if idx := strings.LastIndex(base, "/"); idx >= 0 && idx < len(base)-1 {
+		base = strings.TrimSpace(base[idx+1:])
+	}
+	if open := strings.IndexByte(base, '('); open > 0 && strings.HasSuffix(base, ")") {
+		base = strings.TrimSpace(base[:open])
+	}
+	return base == "gemini-3.5-transcribe" || strings.HasPrefix(base, "gemini-3.5-transcribe-")
 }
 
 // ResolveAutoModel resolves the "auto" model name to an actual available model.

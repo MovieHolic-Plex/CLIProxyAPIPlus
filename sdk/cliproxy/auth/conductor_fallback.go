@@ -158,10 +158,16 @@ func fallbackModelAllowed(patterns []string, fallbackModel string) bool {
 }
 
 func (m *Manager) resolveFallbackModels(ctx context.Context, originalModel string) []string {
+	if util.IsAudioTranscriptionOnlyModel(originalModel) || m.fallbackDeniedForModel(originalModel) {
+		return nil
+	}
 	candidates := make([]string, 0)
 	seen := map[string]struct{}{originalModel: {}}
 	patterns := modelAccessPatternsFromContext(ctx)
 	appendCandidate := func(model string) {
+		if fallbackDenyMarker(model) || util.IsAudioTranscriptionOnlyModel(model) {
+			return
+		}
 		if _, duplicate := seen[model]; duplicate {
 			return
 		}

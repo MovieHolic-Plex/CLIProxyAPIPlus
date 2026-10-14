@@ -218,3 +218,90 @@ func TestFallbackModelAllowed(t *testing.T) {
 		})
 	}
 }
+
+func TestAudioTranscriptionModelsNeverFallbackToOtherModels(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	manager.SetFallbackModels(map[string]string{
+		"gemini-3.5-transcribe":      "claude-sonnet-4",
+		"gemini-3.5-transcribe-live": "claude-sonnet-4",
+	})
+	manager.SetFallbackChain([]string{"claude-sonnet-4", "higher-coding", "lower-coding"}, 5)
+
+	for _, model := range []string{
+		"gemini-3.5-transcribe",
+		"gemini-3.5-transcribe-live",
+		"gemini-3.5-transcribe-preview",
+		"gemini-3.5-transcribe-live-preview",
+		"models/gemini-3.5-transcribe",
+	} {
+		t.Run(model, func(t *testing.T) {
+			if got := manager.resolveFallbackModels(context.Background(), model); len(got) != 0 {
+				t.Fatalf("resolveFallbackModels(%q) = %v, want empty", model, got)
+			}
+			if providers, fallbackModel := manager.ResolveProvidersForFallback(context.Background(), model); len(providers) != 0 || fallbackModel != "" {
+				t.Fatalf("ResolveProvidersForFallback(%q) = (%v, %q), want (nil, \"\")", model, providers, fallbackModel)
+			}
+
+			upstream503 := &Error{
+				HTTPStatus: http.StatusServiceUnavailable,
+				Message:    `{"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}`,
+			}
+			var attempted []string
+			execOnce := func(
+				_ context.Context,
+				_ []string,
+				req cliproxyexecutor.Request,
+				_ cliproxyexecutor.Options,
+				_ int,
+				_ int,
+				_ int,
+			) (cliproxyexecutor.Response, error) {
+				attempted = append(attempted, req.Model)
+				return cliproxyexecutor.Response{}, upstream503
+			}
+
+			_, err := manager.executeWithRouteFallback(
+				context.Background(),
+				[]string{"gemini"},
+				cliproxyexecutor.Request{Model: model},
+				cliproxyexecutor.Options{},
+				execOnce,
+			)
+			if err != upstream503 {
+				t.Fatalf("executeWithRouteFallback(%q) err = %v, want %v", model, err, upstream503)
+			}
+			if len(attempted) != 1 || attempted[0] != model {
+				t.Fatalf("attempted models = %v, want only [%s]", attempted, model)
+			}
+
+			var streamAttempted []string
+			streamOnce := func(
+				_ context.Context,
+				_ []string,
+				req cliproxyexecutor.Request,
+				_ cliproxyexecutor.Options,
+				_ int,
+				_ *int,
+				_ int,
+				_ int,
+			) (*cliproxyexecutor.StreamResult, error) {
+				streamAttempted = append(streamAttempted, req.Model)
+				return nil, upstream503
+			}
+
+			_, errStream := manager.executeStreamWithRouteFallback(
+				context.Background(),
+				[]string{"gemini"},
+				cliproxyexecutor.Request{Model: model},
+				cliproxyexecutor.Options{},
+				streamOnce,
+			)
+			if errStream != upstream503 {
+				t.Fatalf("executeStreamWithRouteFallback(%q) err = %v, want %v", model, errStream, upstream503)
+			}
+			if len(streamAttempted) != 1 || streamAttempted[0] != model {
+				t.Fatalf("stream attempted models = %v, want only [%s]", streamAttempted, model)
+			}
+		})
+	}
+}
