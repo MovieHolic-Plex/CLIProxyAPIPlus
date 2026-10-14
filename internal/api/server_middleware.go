@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
+	geminilive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/gemini/live"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -80,6 +81,12 @@ func (s *Server) homeHeartbeatMiddleware() gin.HandlerFunc {
 		}
 		if c != nil && c.Request != nil {
 			path := c.Request.URL.Path
+			// Live authenticates locally, then explains that Home dispatch is
+			// unsupported; it must not disappear behind an empty heartbeat 503.
+			if path == geminilive.Path || path == "/v1beta"+geminilive.Path {
+				c.Next()
+				return
+			}
 			if strings.HasPrefix(path, "/v0/management/") || path == "/v0/management" || strings.HasPrefix(path, "/v8/management/") || path == "/v8/management" || strings.HasPrefix(path, "/v0/resource/plugins/") || path == "/management.html" {
 				c.Next()
 				return

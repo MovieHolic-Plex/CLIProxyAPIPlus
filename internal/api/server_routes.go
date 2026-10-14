@@ -17,6 +17,7 @@ import (
 	claudemodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/claude/models"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
 	codexmodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/models"
+	geminilive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/gemini/live"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/client/grokbuild"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -59,6 +60,7 @@ func (s *Server) setupRoutes() {
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
 	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
 	s.codexLiveHandler = codexlive.NewHandler(s.handlers.AuthManager, s.cfg)
+	geminiLiveHandler := geminilive.NewHandler(s.handlers.AuthManager, s.getConfig)
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
@@ -107,6 +109,15 @@ func (s *Server) setupRoutes() {
 	s.engine.POST("/v1/realtime/calls/:call_id/accept", standardAuth, s.codexLiveHandler.HandleSIPControl)
 	s.engine.POST("/v1/realtime/calls/:call_id/reject", standardAuth, s.codexLiveHandler.HandleSIPControl)
 	s.engine.POST("/v1/realtime/calls/:call_id/refer", standardAuth, s.codexLiveHandler.HandleSIPControl)
+	geminiLiveAuth := AuthMiddleware(s.accessManager)
+	geminiLiveAccess := func(c *gin.Context) {
+		// The legacy access log includes raw caller keys. Live emits its own
+		// masked session summary instead, including on upstream failures.
+		logging.SkipGinRequestLogging(c)
+		geminiLiveAuth(c)
+	}
+	s.engine.GET(geminilive.Path, geminiLiveAccess, geminiLiveHandler.Handle)
+	s.engine.GET("/v1beta"+geminilive.Path, geminiLiveAccess, geminiLiveHandler.Handle)
 
 	openaiV1 := s.engine.Group("/openai/v1")
 	openaiV1.Use(AuthMiddleware(s.accessManager))

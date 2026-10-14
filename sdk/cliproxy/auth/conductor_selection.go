@@ -2214,6 +2214,12 @@ func (m *Manager) SelectAuth(ctx context.Context, provider, model string, opts c
 // SelectAuthByKind selects one credential of the required kind through the
 // configured scheduling strategy. Credentials of other kinds are skipped.
 func (m *Manager) SelectAuthByKind(ctx context.Context, provider, model, requiredKind string, opts cliproxyexecutor.Options) (*Auth, error) {
+	return m.SelectAuthByKindExcluding(ctx, provider, model, requiredKind, opts, nil)
+}
+
+// SelectAuthByKindExcluding selects one credential of the required kind through
+// the configured scheduling strategy, skipping auth IDs present in excluded.
+func (m *Manager) SelectAuthByKindExcluding(ctx context.Context, provider, model, requiredKind string, opts cliproxyexecutor.Options, excluded map[string]struct{}) (*Auth, error) {
 	if m != nil && m.HomeEnabled() {
 		return nil, &Error{Code: "home_unavailable", Message: "legacy auth selection is unavailable while Home is enabled", HTTPStatus: http.StatusServiceUnavailable}
 	}
@@ -2223,7 +2229,7 @@ func (m *Manager) SelectAuthByKind(ctx context.Context, provider, model, require
 	}
 
 	selectionCtx := withRequiredAuthKind(ctx, requiredKind)
-	selected, _, errPick := m.pickNextLegacy(selectionCtx, provider, model, opts, nil)
+	selected, _, errPick := m.pickNextLegacy(selectionCtx, provider, model, opts, excluded)
 	if errPick != nil {
 		return nil, errPick
 	}

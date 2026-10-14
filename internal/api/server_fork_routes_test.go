@@ -12,6 +12,8 @@ func TestForkOnlyRoutesRegistered(t *testing.T) {
 
 	want := []struct{ method, path string }{
 		{http.MethodPost, "/v1/systemone"},
+		{http.MethodGet, "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"},
+		{http.MethodGet, "/v1beta/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"},
 	}
 	registered := make(map[string]bool)
 	for _, route := range server.engine.Routes() {
