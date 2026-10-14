@@ -203,20 +203,81 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 	if auth == nil || auth.ID == "" {
 		return nil, nil
 	}
-	NormalizeCredentialMetadata(auth.Metadata)
-	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
-		return nil, fmt.Errorf("update auth: %w", errWeight)
-	}
 	releaseMutation, errMutation := m.lockAuthMutationContext(ctx, auth.ID)
 	if errMutation != nil {
 		return nil, errMutation
 	}
-	defer releaseMutation()
+	committedAuth, didCommit, effects, err := m.updateInternalLocked(ctx, base, auth, mode)
+	releaseMutation()
+	if err == nil && didCommit && committedAuth != nil {
+		m.finishAuthUpdate(ctx, committedAuth, effects)
+	}
+	return committedAuth, err
+}
+
+// finishAuthUpdate runs post-commit side effects after the per-auth mutation
+// gate has been released, preserving the original update ordering in which
+// hooks and scheduler updates could re-enter manager operations.
+func (m *Manager) finishAuthUpdate(ctx context.Context, committed *Auth, effects authUpdateEffects) {
+	if committed == nil {
+		return
+	}
+	if !shouldDeferAPIKeyModelAliasRebuild(ctx) {
+		m.rebuildAPIKeyModelAliasFromRuntimeConfig()
+	}
+	if m.scheduler != nil {
+		m.scheduler.upsertAuth(effects.schedulerSnapshot)
+		for _, changed := range effects.reconciled {
+			if changed.ID != committed.ID {
+				m.scheduler.upsertAuth(changed.Clone())
+			}
+		}
+	}
+	m.structuralEpoch.Add(1)
+	m.queueRefreshReschedule(committed.ID)
+	if effects.persistReconciled {
+		for _, changed := range effects.reconciled {
+			if changed.ID != committed.ID {
+				_ = m.persist(ctx, changed)
+			}
+		}
+	}
+	m.hook.OnAuthUpdated(ctx, committed.Clone())
+	if effects.persistCooldown {
+		m.persistCooldownStates(context.Background())
+	}
+}
+
+// authUpdateEffects carries snapshots from the locked commit to the unlocked
+// side-effect phase, including fork-only Antigravity primary/standby changes.
+type authUpdateEffects struct {
+	schedulerSnapshot *Auth
+	reconciled        []*Auth
+	persistReconciled bool
+	persistCooldown   bool
+}
+
+// updateInternalLocked assumes the caller already holds the per-auth
+// mutation lock. It only commits manager state; callers run
+// finishAuthUpdate after releasing the gate. persistCooldownStates is also
+// deferred by callers because it may re-enter manager operations.
+// updateInternalLocked commits an update while the caller holds the gate.
+// The second return value reports whether this call actually committed new
+// state (versus returning the current snapshot for a discarded stale
+// update); only real commits may run post-commit side effects.
+func (m *Manager) updateInternalLocked(ctx context.Context, base, auth *Auth, mode updateAuthMode) (committedAuth *Auth, committed bool, effects authUpdateEffects, err error) {
+	if auth == nil || auth.ID == "" {
+		return nil, false, effects, nil
+	}
+	NormalizeCredentialMetadata(auth.Metadata)
+	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
+		return nil, false, effects, fmt.Errorf("update auth: %w", errWeight)
+	}
 	m.mu.Lock()
 	existing, ok := m.auths[auth.ID]
 	if !ok || existing == nil {
 		m.mu.Unlock()
-		return nil, nil
+		return nil, false, effects, nil
 	}
 	if m.authEpochs == nil {
 		m.authEpochs = make(map[string]uint64)
@@ -226,14 +287,16 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 	}
 	if (mode == updateModeRefresh || mode == updateModePrepare) && base != nil && existing.RegistrationEpoch != base.RegistrationEpoch {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("update auth %s: stale registration epoch %d != %d", auth.ID, base.RegistrationEpoch, existing.RegistrationEpoch)
+		return nil, false, effects, fmt.Errorf("update auth %s: stale registration epoch %d != %d", auth.ID, base.RegistrationEpoch, existing.RegistrationEpoch)
 	}
 	// Do not let an in-flight refresh overwrite credentials committed after its snapshot.
 	if mode == updateModeRefresh && base != nil && (existing.CredentialVersion != base.CredentialVersion || CredentialsChanged(base, existing)) {
 		if auth.CodexRefreshPatch == nil || !auth.CodexRefreshPatch.CanApplyTo(existing.Metadata) {
 			current := existing.Clone()
 			m.mu.Unlock()
-			return current, nil
+			// Discarded stale refresh: committed=false so callers do not
+			// run finishAuthUpdate for a state this call did not change.
+			return current, false, effects, nil
 		}
 	}
 	if mode == updateModeRefresh {
@@ -251,7 +314,7 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 	}
 	if auth.RegistrationEpoch != 0 && auth.RegistrationEpoch < m.authEpochs[auth.ID] {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("update auth %s: stale registration epoch %d < %d", auth.ID, auth.RegistrationEpoch, m.authEpochs[auth.ID])
+		return nil, false, effects, fmt.Errorf("update auth %s: stale registration epoch %d < %d", auth.ID, auth.RegistrationEpoch, m.authEpochs[auth.ID])
 	}
 	if auth.RegistrationEpoch >= m.authEpochs[auth.ID] {
 		m.authEpochs[auth.ID] = auth.RegistrationEpoch
@@ -333,14 +396,14 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 		// A minted Meta key must reach the store before requests can use it.
 		if persistMetaMint {
 			m.mu.Unlock()
-			return nil, fmt.Errorf("persist meta auth: %w", errPersist)
+			return nil, false, effects, fmt.Errorf("persist meta auth: %w", errPersist)
 		}
 		// Ordinary persistence failures remain non-fatal, but never silent.
 		log.WithFields(log.Fields{"auth_id": auth.ID, "credential": auth.ID, "provider": auth.Provider}).Warnf("failed to persist updated auth %s (%s): %v", auth.Provider, auth.ID, errPersist)
 	}
 	if m.authEpochs[auth.ID] != auth.RegistrationEpoch {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("auth %s changed registration during persistence", auth.ID)
+		return nil, false, effects, fmt.Errorf("auth %s changed registration during persistence", auth.ID)
 	}
 	mergeAuthSaveDelta(auth, existingBeforeSave, existing, false)
 	if existing.Generation >= auth.Generation {
@@ -355,37 +418,16 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 	antigravityReconcileChanged := m.reconcileSoleAntigravityPrimaryLocked(preferredID)
 	m.notifyAuthChangeLocked(auth.ID)
 	// Snapshot before unlocking: MarkResult mutates the published auth in place.
-	var schedulerSnapshot *Auth
 	if m.scheduler != nil {
-		schedulerSnapshot = authClone.Clone()
+		effects.schedulerSnapshot = authClone.Clone()
 	}
+	for _, changed := range antigravityReconcileChanged {
+		effects.reconciled = append(effects.reconciled, changed.Clone())
+	}
+	effects.persistReconciled = !persistMetaMint
+	effects.persistCooldown = cooldownStateChanged
 	m.mu.Unlock()
-	releaseMutation()
-	if !shouldDeferAPIKeyModelAliasRebuild(ctx) {
-		m.rebuildAPIKeyModelAliasFromRuntimeConfig()
-	}
-	if m.scheduler != nil {
-		m.scheduler.upsertAuth(schedulerSnapshot)
-		for _, changed := range antigravityReconcileChanged {
-			if changed.ID != auth.ID {
-				m.scheduler.upsertAuth(changed.Clone())
-			}
-		}
-	}
-	m.structuralEpoch.Add(1)
-	m.queueRefreshReschedule(auth.ID)
-	if !persistMetaMint {
-		for _, changed := range antigravityReconcileChanged {
-			if changed.ID != auth.ID {
-				_ = m.persist(ctx, changed)
-			}
-		}
-	}
-	m.hook.OnAuthUpdated(ctx, auth.Clone())
-	if cooldownStateChanged {
-		m.persistCooldownStates(context.Background())
-	}
-	return auth.Clone(), nil
+	return auth.Clone(), true, effects, nil
 }
 
 // Remove deletes an auth from runtime state without persisting.

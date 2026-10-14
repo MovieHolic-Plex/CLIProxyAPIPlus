@@ -1065,7 +1065,7 @@ func antigravityRecordRequestOutcome(auth *cliproxyauth.Auth, statusCode int, bo
 		tracker.RecordFailure(accountIndex)
 	}
 }
-func antigravityNormalizeFunctionDeclarationsForExecutor(payload []byte) []byte {
+func antigravityNormalizeFunctionDeclarationsForExecutor(payload []byte, preserveNativeDeclarations bool) []byte {
 	if !gjson.GetBytes(payload, "request.tools").Exists() {
 		return payload
 	}
@@ -1080,7 +1080,14 @@ func antigravityNormalizeFunctionDeclarationsForExecutor(payload []byte) []byte 
 			continue
 		}
 		if decls, ok := toolMap["functionDeclarations"].([]any); ok && len(decls) > 0 {
-			normalized = append(normalized, map[string]any{"function_declarations": decls})
+			// Keep native ProtoJSON declarations in their supplied shape.
+			// Custom tools wrapped by the package transforms retain the fork's
+			// function_declarations wire normalization.
+			key := "function_declarations"
+			if preserveNativeDeclarations {
+				key = "functionDeclarations"
+			}
+			normalized = append(normalized, map[string]any{key: decls})
 			continue
 		}
 		if decls, ok := toolMap["function_declarations"].([]any); ok && len(decls) > 0 {

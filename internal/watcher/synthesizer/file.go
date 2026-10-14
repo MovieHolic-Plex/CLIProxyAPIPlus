@@ -82,6 +82,9 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	cfg := ctx.Config
 	var metadata map[string]any
 	if errUnmarshal := json.Unmarshal(data, &metadata); errUnmarshal != nil {
+		if ctx.StrictFileParsing {
+			return nil, fmt.Errorf("parse auth file: %w", errUnmarshal)
+		}
 		return nil, nil
 	}
 	coreauth.NormalizeCredentialMetadata(metadata)
@@ -103,6 +106,9 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 			FileName: filepath.Base(fullPath),
 			RawJSON:  data,
 		})
+		if errParse != nil && ctx.StrictFileParsing {
+			return nil, fmt.Errorf("parse plugin auth file: %w", errParse)
+		}
 		if errParse == nil && handled {
 			auths = compactPluginAuths(auths)
 			if len(auths) == 0 {

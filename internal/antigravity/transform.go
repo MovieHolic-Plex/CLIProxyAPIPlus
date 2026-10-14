@@ -333,19 +333,18 @@ func normalizeClaudeTools(payload []byte) ([]byte, int, []string) {
 					continue
 				}
 				name := fmt.Sprintf("%v", declMap["name"])
-				desc := fmt.Sprintf("%v", declMap["description"])
-				schema := declMap["parameters"]
-				if schema == nil {
-					schema = map[string]any{
+				// Native declarations may carry parametersJsonSchema and
+				// response schemas. Preserve those fields for the executor's
+				// model-aware schema sanitizer rather than rebuilding a lossy
+				// name/description/parameters subset.
+				declMap["name"] = sanitizeToolName(name)
+				if pickFirstNonNil([]map[string]any{declMap}, "parameters", "parametersJsonSchema", "parameters_json_schema") == nil {
+					declMap["parameters"] = map[string]any{
 						"type":       "object",
 						"properties": map[string]any{},
 					}
 				}
-				functionDeclarations = append(functionDeclarations, map[string]any{
-					"name":        sanitizeToolName(name),
-					"description": desc,
-					"parameters":  schema,
-				})
+				functionDeclarations = append(functionDeclarations, declMap)
 				debugSummaries = append(debugSummaries, fmt.Sprintf("decl=%s,src=functionDeclarations", sanitizeToolName(name)))
 			}
 			continue
@@ -920,15 +919,10 @@ func wrapToolsAsFunctionDeclarations(payload []byte) (int, int, error) {
 				if !ok {
 					continue
 				}
-				params, _ := declMap["parameters"].(map[string]any)
-				if params == nil {
-					params = map[string]any{"type": "OBJECT", "properties": map[string]any{}}
+				if pickFirstNonNil([]map[string]any{declMap}, "parameters", "parametersJsonSchema", "parameters_json_schema") == nil {
+					declMap["parameters"] = map[string]any{"type": "OBJECT", "properties": map[string]any{}}
 				}
-				functionDeclarations = append(functionDeclarations, map[string]any{
-					"name":        fmt.Sprintf("%v", declMap["name"]),
-					"description": fmt.Sprintf("%v", declMap["description"]),
-					"parameters":  params,
-				})
+				functionDeclarations = append(functionDeclarations, declMap)
 			}
 			continue
 		}
