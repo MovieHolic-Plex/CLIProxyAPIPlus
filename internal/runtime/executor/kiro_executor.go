@@ -802,6 +802,7 @@ func (e *KiroExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Auth
 	req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
 	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	applyKiroTokenTypeHeader(req, auth)
 	var attrs map[string]string
 	if auth != nil {
 		attrs = auth.Attributes
@@ -859,6 +860,18 @@ func getAccountKey(auth *cliproxyauth.Auth) string {
 }
 
 // getAuthValue looks up a value by key in auth Metadata, then Attributes.
+// applyKiroTokenTypeHeader announces API-key credentials. Kiro expects the
+// explicit token type for keys and must not receive it for login-flow tokens,
+// which are identified by their bearer value alone.
+func applyKiroTokenTypeHeader(req *http.Request, auth *cliproxyauth.Auth) {
+	if req == nil {
+		return
+	}
+	if getAuthValue(auth, "auth_method") == "apikey" {
+		req.Header.Set("tokentype", "API_KEY")
+	}
+}
+
 func getAuthValue(auth *cliproxyauth.Auth, key string) string {
 	if auth == nil {
 		return ""
@@ -1050,6 +1063,7 @@ func (e *KiroExecutor) executeWithRetry(ctx context.Context, auth *cliproxyauth.
 
 			// Bearer token authentication for all auth types (Builder ID, IDC, social, etc.)
 			httpReq.Header.Set("Authorization", "Bearer "+accessToken)
+			applyKiroTokenTypeHeader(httpReq, auth)
 
 			var attrs map[string]string
 			if auth != nil {
@@ -1610,6 +1624,7 @@ func (e *KiroExecutor) executeStreamWithRetry(ctx context.Context, auth *cliprox
 
 			// Bearer token authentication for all auth types (Builder ID, IDC, social, etc.)
 			httpReq.Header.Set("Authorization", "Bearer "+accessToken)
+			applyKiroTokenTypeHeader(httpReq, auth)
 
 			var attrs map[string]string
 			if auth != nil {

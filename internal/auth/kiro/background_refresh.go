@@ -164,6 +164,17 @@ func (r *BackgroundRefresher) refreshSingle(ctx context.Context, token *Token) {
 	// Normalize auth method to lowercase for case-insensitive matching
 	authMethod := strings.ToLower(token.AuthMethod)
 
+	// API keys carry no refresh token and stay valid until Kiro revokes them. The
+	// sweep starts from the oldest unverified token, so a key that is never marked
+	// verified would also starve credentials that do need a refresh.
+	if authMethod == "apikey" {
+		token.LastVerified = time.Now()
+		if err := r.tokenRepo.UpdateToken(token); err != nil {
+			log.Printf("failed to mark api key %s verified: %v", token.ID, err)
+		}
+		return
+	}
+
 	// Create refresh function based on auth method
 	refreshFunc := func(ctx context.Context) (*KiroTokenData, error) {
 		switch authMethod {

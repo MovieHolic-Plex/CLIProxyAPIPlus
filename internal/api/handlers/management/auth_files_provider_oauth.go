@@ -1706,7 +1706,13 @@ func (h *Handler) RequestKiroToken(c *gin.Context) {
 	ctx := context.Background()
 	ctx = PopulateAuthContext(ctx, c)
 
-	kind, errKind := kiro.ParseDeviceLoginKind(strings.TrimSpace(c.Query("provider")))
+	providerParam := strings.TrimSpace(c.Query("provider"))
+	if strings.EqualFold(providerParam, "apikey") {
+		h.registerKiroAPIKeyAuth(c, ctx)
+		return
+	}
+
+	kind, errKind := kiro.ParseDeviceLoginKind(providerParam)
 	if errKind != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": errKind.Error()})
 		return
@@ -1715,7 +1721,18 @@ func (h *Handler) RequestKiroToken(c *gin.Context) {
 	fmt.Printf("Initializing Kiro authentication (%s)...\n", kind)
 
 	client := kiro.NewDeviceLoginClient(h.cfg)
-	flow, errStart := client.Start(ctx, kind)
+	var flow *kiro.DeviceLoginFlow
+	var errStart error
+	if kind == kiro.DeviceLoginIDC {
+		startURL, region := kiroIDCQueryParams(c)
+		if startURL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "startUrl is required for an Identity Center login"})
+			return
+		}
+		flow, errStart = client.StartIDC(ctx, startURL, region)
+	} else {
+		flow, errStart = client.Start(ctx, kind)
+	}
 	if errStart != nil {
 		log.Errorf("Failed to start Kiro device login: %v", errStart)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start device authorization flow"})
@@ -1754,91 +1771,7 @@ func (h *Handler) RequestKiroToken(c *gin.Context) {
 			return
 		}
 
-		tokenData := token.ToTokenData()
-		storage := &kiro.KiroTokenStorage{
-			Type:         "kiro",
-			AccessToken:  tokenData.AccessToken,
-			RefreshToken: tokenData.RefreshToken,
-			ProfileArn:   tokenData.ProfileArn,
-			ExpiresAt:    tokenData.ExpiresAt,
-			AuthMethod:   tokenData.AuthMethod,
-			Provider:     tokenData.Provider,
-			LastRefresh:  time.Now().Format(time.RFC3339),
-			ClientID:     tokenData.ClientID,
-			ClientSecret: tokenData.ClientSecret,
-			Region:       tokenData.Region,
-			StartURL:     tokenData.StartURL,
-			Email:        tokenData.Email,
-		}
-
-		fileName := kiro.GenerateTokenFileName(tokenData)
-		label := fmt.Sprintf("kiro-%s", tokenData.AuthMethod)
-		if label == "kiro-" {
-			label = "kiro"
-		}
-
-		metadata := map[string]any{
-			"type":          "kiro",
-			"access_token":  tokenData.AccessToken,
-			"refresh_token": tokenData.RefreshToken,
-			"profile_arn":   tokenData.ProfileArn,
-			"expires_at":    tokenData.ExpiresAt,
-			"auth_method":   tokenData.AuthMethod,
-			"provider":      tokenData.Provider,
-			"client_id":     tokenData.ClientID,
-			"client_secret": tokenData.ClientSecret,
-			"email":         tokenData.Email,
-			"auth_kind":     "oauth",
-		}
-		if tokenData.Region != "" {
-			metadata["region"] = tokenData.Region
-		}
-		if tokenData.StartURL != "" {
-			metadata["start_url"] = tokenData.StartURL
-		}
-
-		attributes := map[string]string{
-			"auth_kind": "oauth",
-			"email":     tokenData.Email,
-			"region":    tokenData.Region,
-		}
-		if tokenData.ProfileArn != "" {
-			attributes["profile_arn"] = tokenData.ProfileArn
-		}
-		if tokenData.AuthMethod == "builder-id" {
-			attributes["source"] = "aws-builder-id"
-		} else if tokenData.AuthMethod != "" {
-			attributes["source"] = "kiro-" + tokenData.AuthMethod
-		} else {
-			attributes["source"] = "kiro-device"
-		}
-
-		record := &coreauth.Auth{
-			ID:         fileName,
-			Provider:   "kiro",
-			FileName:   fileName,
-			Label:      label,
-			Storage:    storage,
-			Metadata:   metadata,
-			Attributes: attributes,
-		}
-
-		if errGuard := guardOAuthSessionPendingForSave(state, "kiro"); errGuard != nil {
-			return
-		}
-		savedPath, errSave := h.saveTokenRecord(ctx, record)
-		if errSave != nil {
-			log.Errorf("Failed to save Kiro token to file: %v", errSave)
-			SetOAuthSessionError(state, "Failed to save token to file")
-			return
-		}
-
-		signedOut := []string{}
-		if kind == kiro.DeviceLoginGoogle || kind == kiro.DeviceLoginGitHub {
-			signedOut = h.probeKiroSocialCredentials(ctx, fileName)
-		}
-		completeKiroOAuthSession(state, signedOut)
-		fmt.Printf("Kiro authentication successful! Token saved to %s\n", savedPath)
+		h.persistKiroToken(ctx, state, kind, token)
 	}()
 
 	response := gin.H{
@@ -1856,6 +1789,154 @@ func (h *Handler) RequestKiroToken(c *gin.Context) {
 	}
 	response["expires_in"] = expiresIn
 	c.JSON(http.StatusOK, response)
+}
+
+// persistKiroToken writes a completed Kiro login as an auth file and closes the
+// session. Device logins and API-key logins share it so the stored shape stays
+// identical whichever path produced the credential.
+func (h *Handler) persistKiroToken(ctx context.Context, state string, kind kiro.DeviceLoginKind, token *kiro.DeviceLoginToken) {
+	tokenData := token.ToTokenData()
+	storage := &kiro.KiroTokenStorage{
+		Type:         "kiro",
+		AccessToken:  tokenData.AccessToken,
+		RefreshToken: tokenData.RefreshToken,
+		ProfileArn:   tokenData.ProfileArn,
+		ExpiresAt:    tokenData.ExpiresAt,
+		AuthMethod:   tokenData.AuthMethod,
+		Provider:     tokenData.Provider,
+		LastRefresh:  time.Now().Format(time.RFC3339),
+		ClientID:     tokenData.ClientID,
+		ClientSecret: tokenData.ClientSecret,
+		Region:       tokenData.Region,
+		StartURL:     tokenData.StartURL,
+		Email:        tokenData.Email,
+	}
+
+	fileName := kiro.GenerateTokenFileName(tokenData)
+	label := fmt.Sprintf("kiro-%s", tokenData.AuthMethod)
+	if label == "kiro-" {
+		label = "kiro"
+	}
+
+	metadata := map[string]any{
+		"type":          "kiro",
+		"access_token":  tokenData.AccessToken,
+		"refresh_token": tokenData.RefreshToken,
+		"profile_arn":   tokenData.ProfileArn,
+		"expires_at":    tokenData.ExpiresAt,
+		"auth_method":   tokenData.AuthMethod,
+		"provider":      tokenData.Provider,
+		"client_id":     tokenData.ClientID,
+		"client_secret": tokenData.ClientSecret,
+		"email":         tokenData.Email,
+		"auth_kind":     "oauth",
+	}
+	if tokenData.Region != "" {
+		metadata["region"] = tokenData.Region
+	}
+	if tokenData.StartURL != "" {
+		metadata["start_url"] = tokenData.StartURL
+	}
+
+	attributes := map[string]string{
+		"auth_kind": "oauth",
+		"email":     tokenData.Email,
+		"region":    tokenData.Region,
+	}
+	if tokenData.ProfileArn != "" {
+		attributes["profile_arn"] = tokenData.ProfileArn
+	}
+	if tokenData.AuthMethod == "builder-id" {
+		attributes["source"] = "aws-builder-id"
+	} else if tokenData.AuthMethod != "" {
+		attributes["source"] = "kiro-" + tokenData.AuthMethod
+	} else {
+		attributes["source"] = "kiro-device"
+	}
+
+	record := &coreauth.Auth{
+		ID:         fileName,
+		Provider:   "kiro",
+		FileName:   fileName,
+		Label:      label,
+		Storage:    storage,
+		Metadata:   metadata,
+		Attributes: attributes,
+	}
+
+	if errGuard := guardOAuthSessionPendingForSave(state, "kiro"); errGuard != nil {
+		return
+	}
+	savedPath, errSave := h.saveTokenRecord(ctx, record)
+	if errSave != nil {
+		log.Errorf("Failed to save Kiro token to file: %v", errSave)
+		SetOAuthSessionError(state, "Failed to save token to file")
+		return
+	}
+
+	signedOut := []string{}
+	if kind == kiro.DeviceLoginGoogle || kind == kiro.DeviceLoginGitHub {
+		signedOut = h.probeKiroSocialCredentials(ctx, fileName)
+	}
+	completeKiroOAuthSession(state, signedOut)
+	fmt.Printf("Kiro authentication successful! Token saved to %s\n", savedPath)
+}
+
+// registerKiroAPIKeyAuth validates a Kiro API key (ksk_...), resolves the profile
+// it belongs to, and registers it as an auth file. API keys carry no refresh
+// token, so there is no polling phase and the session completes inline.
+func (h *Handler) registerKiroAPIKeyAuth(c *gin.Context, ctx context.Context) {
+	apiKey := strings.TrimSpace(firstNonBlankQueryValue(c, "apiKey", "api_key", "key"))
+	if !kiro.IsKiroAPIKey(apiKey) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "apiKey must be a Kiro API key starting with ksk_"})
+		return
+	}
+	region := kiro.NormalizeKiroRegion(firstNonBlankQueryValue(c, "region", "api_region", "apiRegion"))
+	profileArn, errResolve := kiro.ResolveKiroAPIKeyProfile(ctx, h.cfg, apiKey, region)
+	if errResolve != nil {
+		log.WithError(errResolve).Error("Failed to resolve Kiro API key profile")
+		if errors.Is(errResolve, kiro.ErrKiroAPIKeyRejected) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Kiro rejected the API key"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to validate the Kiro API key"})
+		return
+	}
+
+	state := fmt.Sprintf("kiro-%d", time.Now().UnixNano())
+	RegisterOAuthSession(state, "kiro")
+	go func() {
+		h.persistKiroToken(ctx, state, "", &kiro.DeviceLoginToken{
+			AccessToken: apiKey,
+			ProfileArn:  profileArn,
+			Region:      kiro.ResolveKiroAPIKeyRegion(profileArn, region),
+			ExpiresIn:   kiro.KiroAPIKeyLifetimeSeconds,
+			AuthMethod:  "apikey",
+			Provider:    "AWS",
+		})
+	}()
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok",
+		"state":  state,
+		"flow":   "apikey",
+	})
+}
+
+// kiroIDCQueryParams reads the Identity Center portal URL and its OIDC region,
+// accepting the snake_case spellings the CLI and reference tools use.
+func kiroIDCQueryParams(c *gin.Context) (string, string) {
+	return firstNonBlankQueryValue(c, "startUrl", "start_url", "startURL"),
+		firstNonBlankQueryValue(c, "region", "idc_region", "idcRegion")
+}
+
+func firstNonBlankQueryValue(c *gin.Context, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(c.Query(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // RequestZcodeToken starts the GLM ZCode OAuth flow (UNOFFICIAL, opt-in).

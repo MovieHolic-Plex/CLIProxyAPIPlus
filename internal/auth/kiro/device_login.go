@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,8 +32,19 @@ const (
 	kiroDeviceBuilderIDStartURL    = "https://view.awsapps.com/start"
 	kiroDeviceBuilderIDRegion      = "us-east-1"
 	kiroDeviceBuilderIDClientName  = "kiro-cli"
+	kiroDeviceIDCClientName        = "Kiro IDE"
 	kiroDeviceDefaultSocialTimeout = 5 * time.Minute
 )
+
+// kiroDeviceIDCScopes mirrors the scope set the Identity Center auth-code flow
+// already registers, so both Identity Center paths ask AWS for the same grants.
+var kiroDeviceIDCScopes = []string{
+	"codewhisperer:completions",
+	"codewhisperer:analysis",
+	"codewhisperer:conversations",
+	"codewhisperer:transformations",
+	"codewhisperer:taskassist",
+}
 
 var (
 	// ErrDeviceAuthorizationPending means the operator has not approved yet.
@@ -52,6 +64,9 @@ const (
 	DeviceLoginGoogle    DeviceLoginKind = "Google"
 	DeviceLoginGitHub    DeviceLoginKind = "Github"
 	DeviceLoginBuilderID DeviceLoginKind = "BuilderId"
+	// DeviceLoginIDC is an AWS IAM Identity Center (organization) account. It
+	// needs the portal start URL and the region that hosts the directory.
+	DeviceLoginIDC DeviceLoginKind = "IDC"
 )
 
 // DeviceLoginFlow is the operator-facing device authorization session.
@@ -66,6 +81,8 @@ type DeviceLoginFlow struct {
 	ClientID                string
 	ClientSecret            string
 	Region                  string
+	// StartURL is the Identity Center portal URL an IDC flow was started with.
+	StartURL string
 }
 
 // DeviceLoginToken is the approved credential document.
@@ -112,8 +129,10 @@ func ParseDeviceLoginKind(raw string) (DeviceLoginKind, error) {
 		return DeviceLoginGoogle, nil
 	case "github", "github.com":
 		return DeviceLoginGitHub, nil
+	case "idc", "organization", "organisation", "org", "aws-idc", "identity-center", "iam-identity-center":
+		return DeviceLoginIDC, nil
 	default:
-		return "", fmt.Errorf("kiro device login provider must be builder-id, google, or github")
+		return "", fmt.Errorf("kiro device login provider must be builder-id, idc, google, or github")
 	}
 }
 
@@ -136,10 +155,14 @@ func (c *DeviceLoginClient) Poll(ctx context.Context, flow *DeviceLoginFlow) (*D
 	if flow == nil {
 		return nil, fmt.Errorf("kiro device login flow is nil")
 	}
-	if flow.Kind == DeviceLoginBuilderID {
+	switch flow.Kind {
+	case DeviceLoginBuilderID:
 		return c.pollBuilderID(ctx, flow)
+	case DeviceLoginIDC:
+		return c.pollIDC(ctx, flow)
+	default:
+		return c.pollSocial(ctx, flow)
 	}
-	return c.pollSocial(ctx, flow)
 }
 
 // Wait polls at the advertised interval until approved, denied, expired, or ctx ends.
@@ -360,6 +383,153 @@ func (c *DeviceLoginClient) pollBuilderID(ctx context.Context, flow *DeviceLogin
 		AuthMethod:   "builder-id",
 		Provider:     "AWS",
 	}, nil
+}
+
+// StartIDC begins the AWS IAM Identity Center device flow. Unlike Start it needs
+// the portal start URL and the OIDC region, because every Identity Center
+// instance lives in a customer-chosen region.
+func (c *DeviceLoginClient) StartIDC(ctx context.Context, startURL, region string) (*DeviceLoginFlow, error) {
+	if c == nil {
+		return nil, fmt.Errorf("kiro device login client is nil")
+	}
+	portalStartURL := normalizeIDCStartURL(startURL)
+	if portalStartURL == "" {
+		return nil, fmt.Errorf("kiro identity center start URL must be an http(s) portal URL such as https://example.awsapps.com/start")
+	}
+	oidcRegion := NormalizeKiroRegion(region)
+	if oidcRegion == "" {
+		oidcRegion = kiroDeviceBuilderIDRegion
+	}
+	registration, err := c.oidcCall(ctx, oidcRegion, "/client/register", map[string]any{
+		"clientName": kiroDeviceIDCClientName,
+		"clientType": "public",
+		"scopes":     kiroDeviceIDCScopes,
+		"grantTypes": []string{"urn:ietf:params:oauth:grant-type:device_code", "refresh_token"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	clientID := strings.TrimSpace(jsonString(registration["clientId"]))
+	clientSecret := strings.TrimSpace(jsonString(registration["clientSecret"]))
+	if clientID == "" || clientSecret == "" {
+		return nil, fmt.Errorf("identity center client registration returned no credentials")
+	}
+	authorization, err := c.oidcCall(ctx, oidcRegion, "/device_authorization", map[string]any{
+		"clientId":     clientID,
+		"clientSecret": clientSecret,
+		"startUrl":     portalStartURL,
+	})
+	if err != nil {
+		return nil, err
+	}
+	deviceCode := strings.TrimSpace(jsonString(authorization["deviceCode"]))
+	userCode := strings.TrimSpace(jsonString(authorization["userCode"]))
+	if deviceCode == "" {
+		return nil, fmt.Errorf("identity center device authorization returned no device code")
+	}
+	if userCode == "" {
+		return nil, fmt.Errorf("identity center device authorization returned no user code")
+	}
+	verificationURI := strings.TrimSpace(jsonString(authorization["verificationUri"]))
+	// The URL AWS returns points at the Builder ID device page, which asks for an
+	// email address and cannot finish an Identity Center sign-in, so the portal
+	// device page is preferred and AWS's value stays as the fallback.
+	verificationComplete := buildIDCDeviceURL(portalStartURL, userCode)
+	if verificationComplete == "" {
+		verificationComplete = strings.TrimSpace(jsonString(authorization["verificationUriComplete"]))
+	}
+	if verificationComplete == "" {
+		verificationComplete = verificationURI
+	}
+	if verificationComplete == "" {
+		return nil, fmt.Errorf("identity center device authorization returned no verification URL")
+	}
+	expiresIn := jsonNumber(authorization["expiresIn"], 600)
+	interval := jsonNumber(authorization["interval"], 5)
+	return &DeviceLoginFlow{
+		Kind:                    DeviceLoginIDC,
+		DeviceCode:              deviceCode,
+		UserCode:                userCode,
+		VerificationURI:         verificationURI,
+		VerificationURIComplete: verificationComplete,
+		ExpiresIn:               time.Duration(expiresIn) * time.Second,
+		Interval:                time.Duration(interval) * time.Second,
+		ClientID:                clientID,
+		ClientSecret:            clientSecret,
+		Region:                  oidcRegion,
+		StartURL:                portalStartURL,
+	}, nil
+}
+
+func (c *DeviceLoginClient) pollIDC(ctx context.Context, flow *DeviceLoginFlow) (*DeviceLoginToken, error) {
+	payload, err := c.oidcCall(ctx, flow.Region, "/token", map[string]any{
+		"clientId":     flow.ClientID,
+		"clientSecret": flow.ClientSecret,
+		"deviceCode":   flow.DeviceCode,
+		"grantType":    "urn:ietf:params:oauth:grant-type:device_code",
+	})
+	if err != nil {
+		return nil, err
+	}
+	accessToken := strings.TrimSpace(jsonString(payload["accessToken"]))
+	if accessToken == "" {
+		return nil, fmt.Errorf("identity center returned no access token")
+	}
+	region := strings.TrimSpace(flow.Region)
+	if region == "" {
+		region = kiroDeviceBuilderIDRegion
+	}
+	return &DeviceLoginToken{
+		AccessToken:  accessToken,
+		RefreshToken: strings.TrimSpace(jsonString(payload["refreshToken"])),
+		ExpiresIn:    jsonNumber(payload["expiresIn"], 3600),
+		ClientID:     flow.ClientID,
+		ClientSecret: flow.ClientSecret,
+		Region:       region,
+		StartURL:     flow.StartURL,
+		AuthMethod:   "idc",
+		Provider:     "AWS",
+	}, nil
+}
+
+// normalizeIDCStartURL reduces an Identity Center portal URL to the /start form
+// the OIDC device_authorization call expects, dropping query and fragment.
+func normalizeIDCStartURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return ""
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	path := strings.TrimRight(parsed.Path, "/")
+	path = strings.TrimSuffix(path, "/start")
+	parsed.Path = path + "/start"
+	return parsed.String()
+}
+
+// buildIDCDeviceURL renders the Identity Center portal device page for a user
+// code, mirroring the shape AWS portal URLs use: <start>/#/device?user_code=...
+func buildIDCDeviceURL(startURL, userCode string) string {
+	if startURL == "" || userCode == "" {
+		return ""
+	}
+	parsed, err := url.Parse(startURL)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/"
+	// Assign the raw value and let URL.String percent-escape the fragment exactly
+	// once. The portal reads user_code from the hash with a JS-style decoder, so
+	// "+" must stay literal rather than becoming a form-encoded space.
+	parsed.Fragment = "/device?user_code=" + userCode
+	return parsed.String()
 }
 
 func (c *DeviceLoginClient) socialAuthHost() string {

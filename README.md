@@ -273,6 +273,7 @@ Modern Ant Design-based management console for CLIProxyAPI v8+, combining CPAMC-
 ## Integrations
 
 - **GitLab Duo provider**: [docs/gitlab-duo.md](docs/gitlab-duo.md) — use GitLab Duo as a first-class provider
+- **Kiro login methods**: [docs/kiro-login.md](docs/kiro-login.md) — Builder ID, social, IAM Identity Center (organization) and `ksk_` API keys, plus the kiro-cli import path
 
 ## Contributing
 

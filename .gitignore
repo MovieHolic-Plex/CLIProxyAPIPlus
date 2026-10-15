@@ -33,6 +33,7 @@ auths/*
 docs/*
 !docs/keeper-export.md
 !docs/management-api-v8.md
+!docs/kiro-login.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md
