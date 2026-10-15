@@ -487,7 +487,11 @@ func markAuthCandidatesPrefiltered(opts cliproxyexecutor.Options) cliproxyexecut
 	return opts
 }
 
-func authPriority(auth *Auth) int {
+// configuredAuthPriority returns the priority the operator actually configured on the
+// credential (the auth file "priority" field, or the synthesizer attribute), clamped to
+// >= 0. It deliberately excludes primaryPriorityBonus: that constant is a selection
+// invariant for tier-based lanes, not a value anyone configured.
+func configuredAuthPriority(auth *Auth) int {
 	if auth == nil {
 		return 0
 	}
@@ -503,7 +507,16 @@ func authPriority(auth *Auth) int {
 	if basePriority < 0 {
 		basePriority = 0
 	}
-	if auth.PrimaryInfo != nil && auth.PrimaryInfo.IsPrimary {
+	return basePriority
+}
+
+// authPriority is the tier priority used by the priority-scoped selection lanes: it
+// additionally lifts an Antigravity primary above its standbys with primaryPriorityBonus.
+// Tier priority is not a weight; the weight-robin cycle uses configuredAuthPriority (see
+// legacyAuthWeight).
+func authPriority(auth *Auth) int {
+	basePriority := configuredAuthPriority(auth)
+	if auth != nil && auth.PrimaryInfo != nil && auth.PrimaryInfo.IsPrimary {
 		return basePriority + primaryPriorityBonus
 	}
 	return basePriority
@@ -1143,8 +1156,11 @@ func (s *WeightedRobinSelector) Pick(ctx context.Context, provider, model string
 	return selected, nil
 }
 
+// legacyAuthWeight returns the cycle weight the WeightedRobinSelector builds for an auth.
+// Only the configured priority belongs here: feeding authPriority's primaryPriorityBonus in
+// made the queue report w:1000001 for priority 1 and inflated every cycle by a million slots.
 func legacyAuthWeight(a *Auth) int {
-	w := authPriority(a)
+	w := configuredAuthPriority(a)
 	if w <= 0 {
 		return 1
 	}
