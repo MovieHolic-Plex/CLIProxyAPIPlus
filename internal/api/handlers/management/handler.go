@@ -127,38 +127,79 @@ func NewHandlerWithoutConfigFilePath(cfg *config.Config, manager *coreauth.Manag
 }
 
 // SetConfig updates the in-memory config reference when the server hot-reloads.
+// A config parsed from an older version of the config file is ignored: a later
+// save already changed the file, and the reload for that save publishes it.
 func (h *Handler) SetConfig(cfg *config.Config) {
 	if h == nil {
 		return
 	}
 	cloned := cfg.CloneForRuntime()
 	h.mu.Lock()
+	if h.isStaleConfigFileSnapshotLocked(cloned) {
+		h.mu.Unlock()
+		log.Debug("management: ignoring config reload parsed from an older config file version")
+		return
+	}
 	h.cfg = cloned
 	manager := h.authManager
 	apiKeyIPBlacklist := h.apiKeyIPBlacklist
 	h.mu.Unlock()
-	cfg = cloned
+	applyConfigToRunningComponents(cloned, manager, apiKeyIPBlacklist)
+}
+
+// refreshRuntimeFromCurrentConfig pushes the current in-memory config into the
+// running components after a management save. It does not replace h.cfg: the
+// save already mutated that object, and swapping in a clone would race with the
+// next in-place edit and break callers that hold the pointer.
+func (h *Handler) refreshRuntimeFromCurrentConfig() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	cfg := h.cfg
+	manager := h.authManager
+	apiKeyIPBlacklist := h.apiKeyIPBlacklist
+	onApplied := h.onConfigApplied
+	h.mu.Unlock()
+	if cfg == nil {
+		return
+	}
+	applyConfigToRunningComponents(cfg, manager, apiKeyIPBlacklist)
+	if onApplied != nil {
+		onApplied(cfg)
+	}
+}
+
+// applyConfigToRunningComponents refreshes the auth manager's OAuth aliases,
+// fallback routing and the API-key IP policy from cfg. Callers must not hold h.mu.
+func applyConfigToRunningComponents(cfg *config.Config, manager *coreauth.Manager, apiKeyIPBlacklist *APIKeyIPBlacklistStore) {
+	if cfg == nil {
+		return
+	}
 	if apiKeyIPBlacklist != nil {
 		apiKeyIPBlacklist.UpdatePolicy(APIKeyIPBlacklistPolicyFromConfig(cfg))
 	}
-	if manager != nil {
-		var aliases map[string][]config.OAuthModelAlias
-		var fallbackModels map[string]string
-		var fallbackChain []string
-		var fallbackMaxDepth int
-		var fallbackAllowedModels []string
-		if cfg != nil {
-			aliases = cfg.OAuthModelAlias
-			fallbackModels = cfg.Routing.FallbackModels
-			fallbackChain = cfg.Routing.FallbackChain
-			fallbackMaxDepth = cfg.Routing.FallbackMaxDepth
-			fallbackAllowedModels = cfg.Routing.FallbackAllowedModels
-		}
-		manager.SetOAuthModelAlias(aliases)
-		manager.SetFallbackModels(fallbackModels)
-		manager.SetFallbackChain(fallbackChain, fallbackMaxDepth)
-		manager.SetFallbackAllowedModels(fallbackAllowedModels)
+	if manager == nil {
+		return
 	}
+	manager.SetOAuthModelAlias(cfg.OAuthModelAlias)
+	manager.SetFallbackModels(cfg.Routing.FallbackModels)
+	manager.SetFallbackChain(cfg.Routing.FallbackChain, cfg.Routing.FallbackMaxDepth)
+	manager.SetFallbackAllowedModels(cfg.Routing.FallbackAllowedModels)
+}
+
+// isStaleConfigFileSnapshotLocked reports whether cfg was parsed from config file
+// bytes that are no longer on disk. Management saves hold h.mu, so none can land
+// during the check. Callers must hold h.mu.
+func (h *Handler) isStaleConfigFileSnapshotLocked(cfg *config.Config) bool {
+	if cfg == nil || cfg.SourceHash == "" || h.configFilePath == "" {
+		return false
+	}
+	data, errRead := os.ReadFile(h.configFilePath)
+	if errRead != nil {
+		return false
+	}
+	return config.ComputeSourceHash(data) != cfg.SourceHash
 }
 
 // SetAuthManager updates the auth manager reference used by management endpoints.
@@ -265,6 +306,7 @@ func (h *Handler) reloadConfigAfterManagementSave(ctx context.Context, snapshot 
 		h.appliedReloadGeneration = snapshot.generation
 	}
 	h.mu.Unlock()
+	h.refreshRuntimeFromCurrentConfig()
 }
 
 // reloadConfigAfterManagementSaveAsync reloads from an independent config snapshot.
@@ -511,7 +553,8 @@ func (h *Handler) persistLocked(c *gin.Context) bool {
 	return true
 }
 
-// Helper methods for simple types
+// Helper methods for simple types. The setter and the save run under h.mu, so a
+// reload publishing h.cfg cannot replace it between the change and the save.
 func (h *Handler) updateBoolField(c *gin.Context, set func(bool)) {
 	var body struct {
 		Value *bool `json:"value"`
@@ -520,8 +563,10 @@ func (h *Handler) updateBoolField(c *gin.Context, set func(bool)) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	set(*body.Value)
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) updateIntField(c *gin.Context, set func(int)) {
@@ -532,8 +577,10 @@ func (h *Handler) updateIntField(c *gin.Context, set func(int)) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	set(*body.Value)
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) updateStringField(c *gin.Context, set func(string)) {
@@ -544,6 +591,8 @@ func (h *Handler) updateStringField(c *gin.Context, set func(string)) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	set(*body.Value)
-	h.persist(c)
+	h.persistLocked(c)
 }
