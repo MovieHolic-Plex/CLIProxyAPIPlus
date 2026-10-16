@@ -78,7 +78,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if !useSIWC {
 		body = normalizeCodexInstructions(body, preserveNativeOutput)
 	} else {
-		body = applyCodexSIWCRequestBodyRules(body, hasExplicitInstructions)
+		body = applyCodexSIWCRequestBodyRules(body, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
 	}
 	requestPath := helps.PayloadRequestPath(opts)
 	if imageMode := resolveCodexImageGenerationMode(e.cfg, auth); imageMode == config.DisableImageGenerationOff {
